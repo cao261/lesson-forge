@@ -1,109 +1,118 @@
-﻿# LessonForge · 视频转教案
+﻿# LessonForge · 视频转家教教案
 
-把一段家教/网课视频，变成一份**能直接照着讲**的 Word 教案。
+粘贴一段 B 站教学视频，产出一份**能直接照着讲**的 Word 教案。
 
-粘贴 B 站链接，系统自动完成：下载 → 本地语音转写 → 切分知识点 → 截取例题画面 →
-多模态读图还原题干 → 生成教案 → **两道关审核** → 导出两份 Word。
-
----
+下载 → 本地语音转写 → 切分知识点 → 截取例题画面 → 多模态读图还原题干
+→ 生成教案 → **两道关审核** → 导出两份 Word（教师备课版 / 学生讲义）。
 
 ## 它和"把字幕丢给大模型"差在哪
 
 | 常见做法 | 这个项目 |
 |---|---|
-| 用视频自带字幕 | **一律本地 Whisper**，视频没有字幕也能做 |
+| 用视频自带字幕 | **一律本地 Whisper**，视频没字幕也能做 |
 | 例题靠模型猜 | 截**真实画面**，多帧候选 + 多模态逐张确认 |
 | 公式贴截图 | **Word 原生公式对象（OMML）**，点开就能改 |
 | 出了事才知道 | **审核前置**：规则体检 + 模型交叉核查，不通过就回炉重写 |
-| 一份文档 | **教师备课版 + 学生讲义**两份，出自同一份数据，不会对不上 |
+| 一份文档 | 教师备课版 + 学生讲义两份，出自同一份数据，不会对不上 |
 
 ## 快速开始
 
-```bat
-:: 1. 装依赖（只需一次）
-setup.bat
+```bash
+# 1. 填 API Key
+copy .env.example .env       # Windows；macOS/Linux 用 cp
+#    编辑 .env，把 PRIMARY_API_KEY 换成你的 Key
 
-:: 2. 在 .env 里填 MiniMax 的 API Key（首次运行会自动生成 .env 并打开记事本）
+# 2. 装依赖
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 
-:: 3. 启动，浏览器会自动打开
-start.bat
+# 3. 启动
+.venv\Scripts\python.exe run.py
 ```
 
-也可以走命令行：
+浏览器打开 `http://127.0.0.1:8760`，粘贴链接 → 点「开始生成教案」。
 
-```bat
-python run.py "https://www.bilibili.com/video/BVxxxx"        :: 单条
-python run.py --batch links.txt                              :: 批量，一行一个链接
-python run.py <链接> --subject=数学 --grade=高一 --minutes=90 :: 指定参数
-```
+后台启动不弹浏览器：先设 `LESSONFORGE_NO_BROWSER=1`。
 
 ## 输出
 
-```
-workspace/<任务ID>/
-├─ 教案·教师备课版.docx      讲解话术、审核提示、易错点、板书截图
-├─ 教案·学生讲义.docx        精简投影，只有题目和要点
-├─ 教案·教师备课版.html      浏览器快速预览（MathJax 渲染公式）
-├─ source.mp4 / audio.wav    素材缓存，同一链接重跑直接复用
-├─ transcript.json           转写结果
-├─ segments.json             知识点切分
-└─ lesson.draft.json         教案断点，中途失败可续跑
-```
+两份 Word，出自同一份数据：
 
-## 设计上的几条硬规矩
+- **教师备课版**：教学目标、重难点、逐环节逐句的教师话术、易错点
+- **学生讲义**：知识点讲解 + 例题原图 + 分步解析
 
-- **宁可交有缺口的教案，不交内容编造的教案。** 视频里老师只报了答案没讲过程，
-  那份教案就只写答案，绝不编一套解析出来。
-- **审核宁可标出来让人判断，也不替用户删。** 自动删标签实测误报率三分之一。
-- **审核分两类**：与视频对不上的**事实错误**才算编造；口诀、作业题这类老师
-  自己会补的内容算**教学补充**，不算错、不进回炉。
-- **只能删确定的。** 相似度高且时间大幅重叠的重复例题才自动删；"整题 vs 它
-  的某一道小题"这种只报出来让人确认。
+公式是 Word 原生 OMML 对象，可点击编辑；例题贴视频里的**原始截图**。
 
-## 环境要求
+## 几个关键设计
 
-- Python 3.11+
-- FFmpeg（转码/抽帧用）
-- Word 的 `MML2OMML.XSL`（用于生成原生公式，通常随 Office 一起装）
+**公式必须原生**。LaTeX 经 MML2OMML.XSL 转成 OMML，不贴图——贴图就没法改了。
 
-NVIDIA 显卡可选，装上之后语音转写走 GPU：
+**审核分两类**。`fact`（事实错误）与 `supplement`（教学补充）分开：只有前者算编造、
+驱动回炉；后者单列成建议。把补充意见喂回模型会让它越改越乱。
 
-```bat
-pip install -r requirements-gpu.txt
-```
+**回炉会早停**。事实错误数没降（≥90%）就停，不无限重试，并在结论里如实说明。
+
+**断点保存**。compose 草稿与每轮回炉结果都落盘，中途失败不用从头跑。
+
+**并发有据可依**。并发上限按批次数量定（默认 6），不是按 RPM；限速器按 provider
+全局共享，否则 N 个客户端各放 10 RPM 会叠着超限。
+
+## 配置
+
+常用环境变量（都写在 `.env`）：
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `PRIMARY_API_KEY` | — | 主模型密钥，必填 |
+| `PRIMARY_BASE_URL` | MiniMax | 换成任意 OpenAI 兼容端点 |
+| `FALLBACK_API_KEY` | — | 备用模型，额度用完自动降级 |
+| `LLM_PARALLEL` | 6 | 并发批次数 |
+| `LLM_STREAM` | 1 | 流式收发（**别关**，见下） |
+| `LLM_READ_TIMEOUT` | 300 | 流式读超时（多久没收到帧才算断） |
+| `MAX_REVIEW_ROUNDS` | 2 | 回炉轮数上限 |
+| `WHISPER_MODEL` | large-v3 | 本地转写模型 |
+
+### 为什么必须开流式
+
+客户端默认 `LLM_STREAM=1`，这不是优化是必需。
+
+主模型开思考后会沉默很久才吐第一个字节；非流式时上游一个字节都不发，
+链路中段的网关按空闲超时把连接掐掉，表现成两个服务商都固定在
+~128 秒报 `Server disconnected`。改成流式后，读超时按"多久没收到帧"算，
+思考几分钟也不断。
+
+同理，`app/llm/client.py` 里处理 `<think>` 的逻辑也不能简化：思考正文里全是
+LaTeX 花括号，`<think>` 未闭合时若不整段切掉，括号扫描会从思考里的第一个
+`{` 开始乱扫，抓出一个碰巧合法但只有 `meta` 四个字段的片段——那就是空壳教案
+的来源，且飘忽不定。
 
 ## 自检
 
-每个改动都配了自检脚本，直接跑：
+改动过核心逻辑后跑一遍：
 
-```bat
-python selfcheck_omml.py          :: 公式是不是真的 OMML 对象
-python selfcheck_parallel.py      :: 并发执行器：保序、异常隔离、限速共享
-python selfcheck_normalize.py     :: 结构体检：去重、裁时间、不误删
-python selfcheck_draft_cache.py   :: 断点保存与停滞早停
-python selfcheck_review_batch.py  :: 审核分批与报文裁剪
-python selfcheck_refine_patch.py  :: 回炉补丁的三级兜底链
-python selfcheck_tidy_title.py    :: 标题清洗
-python selfcheck_fetch_reuse.py   :: 素材复用不发网络请求
+```bash
+.venv\Scripts\python.exe selfcheck_think_json.py        # think 剥离与 JSON 提取
+.venv\Scripts\python.exe selfcheck_compose_snapshot.py  # 中途存档不影响主流程
+.venv\Scripts\python.exe selfcheck_draft_cache.py      # 断点草稿
+.venv\Scripts\python.exe selfcheck_review_batch.py      # 审核分批与分级
+.venv\Scripts\python.exe selfcheck_normalize.py        # 切分后结构体检
 ```
 
 ## 目录
 
 ```
 app/
-├─ pipeline.py      流水线编排（下载→转写→切分→截图→读图→成稿→审核→导出）
-├─ config.py        配置，全部可用环境变量覆盖
-├─ textnorm.py      标题清洗
-├─ llm/             模型客户端、路由降级、并发执行、提示词
-├─ stages/          fetch / asr / segment / shots / vision / compose / normalize / review / export
-├─ docx/            Word 构建、LaTeX→OMML、文本清洗
-└─ web/             本地网页界面
+  config.py        全局配置（frozen dataclass，改配置须在导入前设环境变量）
+  pipeline.py      阶段编排、断点保存
+  llm/             模型客户端：流式、主备降级、限流、并发批处理
+  stages/          fetch / transcribe / segment / compose / review / revise
+  docx/            OMML 公式与文档生成
+  web/             本地网页界面
+run.py             启动入口
 ```
 
 ## 说明
 
-- 字幕一律本地转写，不使用平台 CC
-- 例题画面走多模态验证，不做 OCR
-- 公式优先 OMML，失败才降级成 300DPI 位图
-- 素材默认保留以便重跑复用；删掉整个 `workspace/<任务ID>/` 或只删
-  `source.mp4` + `audio.wav` 都可以
+- 字幕一律本地 Whisper（默认 `large-v3`），视频不联网到任何转写服务。
+- 例题截图来自视频原帧，题干由多模态模型读图转写成 LaTeX。
+- 生成的教案是**备课辅助材料**，正式上课前请自行核对公式与结论。

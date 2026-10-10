@@ -1,0 +1,24 @@
+﻿# ---- 核心 ----
+yt-dlp>=2024.8.6
+faster-whisper>=1.0.3
+# Windows 上从 Edge/Chrome 借登录 Cookie 要用它解 DPAPI，缺了会直接报 DPAPI 失败
+pycryptodomex>=3.20.0
+
+# ---- 网页界面 ----
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+python-dotenv>=1.0.1
+
+# ---- Word 导出 ----
+python-docx>=1.1.0
+latex2mathml>=3.77.0
+lxml>=5.1.0
+Pillow>=10.0.0
+numpy>=1.24.0
+# 中文繁简统一（Whisper 长音频会漂到繁体）
+zhconv>=0.4.2
+
+# ---- 可选：公式 OMML 转换失败时的高清位图兜底 ----
+matplotlib>=3.8.0

@@ -1,0 +1,21 @@
+# 可选：GPU 加速（不装也能跑，会自动退回 CPU，只是慢一些）
+#
+# CTranslate2 在 Windows 上需要 CUDA 12 运行时库（cuBLAS / cuDNN）。
+# 如果你的机器只装了显卡驱动、没装 CUDA Toolkit，直接跑会出现：
+#   RuntimeError: Library cublas64_12.dll is not found or cannot be loaded
+#
+# 两种解决办法，选一种：
+#   A) 装这个文件里的包（程序会自动找到它们，不需要另外装 CUDA Toolkit）
+#        pip install -r requirements-gpu.txt
+#   B) 装完整的 CUDA Toolkit 12.x（官方下载）
+#
+# 装完之后 Whisper 转写大约能快 5~10 倍：
+#   1 小时视频，large-v3 + 显卡 ≈ 3~5 分钟；只用 CPU 则要 60 分钟以上。
+#
+# 不装也能跑：程序会用 ctypes 先真的 load 一次 cuBLAS，
+# 确认加载不了就直接选 CPU（不会因为「有显卡驱动」就误判成 GPU 可用）；
+# 万一还是走到了 GPU，推理报错也会自动退回 CPU 重跑，不会整个任务失败。
+# 跑 selfcheck_cuda_fallback.py 可以验证这条降级链路。
+
+nvidia-cublas-cu12>=12.1
+nvidia-cudnn-cu12>=9.0

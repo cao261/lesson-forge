@@ -1,0 +1,34 @@
+# ---- 依赖与构建产物 ----
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# ---- 密钥：绝对不能提交 ----
+.env
+.env.*
+!.env.example
+
+# ---- 素材与产物（体积大，且是老师的私有内容）----
+workspace/
+selfcheck_out/
+*.wav
+*.mp4
+*.webm
+*.mkv
+*.flv
+*.part
+*.docx
+*.html
+
+# ---- 本地临时探针（下划线开头是排查问题时的一次性脚本）----
+/_*.py
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

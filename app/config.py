@@ -134,6 +134,13 @@ class Settings:
     # 也不宜更高：并发超了服务端会返 429/529，而这两个码被判成"过载"会触发降级，
     # 一轮过载可能把整批打到只有 10 RPM 的 agnes 上排队，反而比重试更慢。
     llm_parallel: int = int(os.getenv("LLM_PARALLEL", "6"))
+    # 流式收发。必须开：MiniMax-M3 开思考后会先沉默很久才吐第一个字，
+    # 非流式时上游一个字节都不发，链路中段的网关按空闲超时把连接掐掉，
+    # 表现成固定 ~128s 的 "Server disconnected without sending a response"。
+    # 流式下上游会持续推 reasoning/内容帧，连接一直是活的。
+    llm_stream: bool = _env_bool("LLM_STREAM", "1")
+    # 流式读超时：只要上游还在推帧就续命，超过这么久一个帧都没有才算断。
+    llm_read_timeout: float = float(os.getenv("LLM_READ_TIMEOUT", "300"))
     mock: bool = _env_bool("LESSONFORGE_MOCK")
 
     # ---- 语音转写 ----

@@ -26,6 +26,10 @@ selfcheck_out/
 # ---- 本地临时探针（下划线开头是排查问题时的一次性脚本）----
 /_*.py
 
+# ---- 工具链落下的临时文件 ----
+/_gh_login_*.txt
+*.unknown_video
+
 # ---- 编辑器 / 系统 ----
 .vscode/
 .idea/

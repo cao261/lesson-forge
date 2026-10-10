@@ -127,7 +127,17 @@ def _escape_loose_quotes(text: str) -> str:
 
 
 def _strip_wrapper(text: str) -> str:
-    """去掉 <think>…</think> 和 ```…``` 包裹，先后顺序不限，循环到稳定。"""
+    """去掉 <think>…</think> 和 ```…``` 包裹，先后顺序不限，循环到稳定。
+
+    另外要处理"<think> 没闭合"：流式下模型被中途掐断时经常这样。
+    这时 <think> 之后全是思考内容、一个正文字符都没有，
+    而思考里全是 LaTeX（\frac{a}{b} 这类），括号严重不平衡。
+    不切掉的话后面 _scan_blobs 会从思考里的第一个 { 开始乱扫，
+    抓出一个碰巧能解析的片段当答案——实测会返回只剩 meta 那 4 个字段的
+    "空壳教案"，而且飘忽不定，正是"抽卡"的根源。
+    """
+    if "<think>" in text and "</think>" not in text:
+        text = text.split("<think>", 1)[0]
     prev = None
     while prev != text:
         prev = text
@@ -140,9 +150,34 @@ def _strip_wrapper(text: str) -> str:
 
 
 def _scan_blobs(text: str, opener: str, closer: str):
-    """逐个吐出括号配平后的片段（供"输出前后有废话"时兜底）。"""
+    """逐个吐出括号配平后的片段（供"输出前后有废话"时兜底）。
+
+    必须跳过 <think>…</think> 区间：思考正文里全是 LaTeX，
+    \frac{a}{b}、{x|x>0} 会把括号配平算错，从那里开始扫很容易
+    抓出一个"碰巧合法但内容是思考"的片段。实测这会返回只剩
+    meta 四字段的空壳教案，而且飘忽不定。
+    """
+    # 先算出思考区间，扫描时整段忽略
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while True:
+        i = text.find("<think>", pos)
+        if i < 0:
+            break
+        j = text.find("</think>", i)
+        if j < 0:
+            spans.append((i, len(text)))
+            break
+        spans.append((i, j + len("</think>")))
+        pos = j + 1
+
+    def in_think(idx: int) -> bool:
+        return any(a <= idx < b for a, b in spans)
+
     depth, start, in_str, esc = 0, -1, False, False
     for i, ch in enumerate(text):
+        if in_think(i):
+            continue
         if in_str:
             if esc:
                 esc = False
@@ -166,11 +201,17 @@ def _scan_blobs(text: str, opener: str, closer: str):
 def _extract_json(text: str) -> Any:
     """从模型输出里稳健地抠出 JSON。
 
-    依次尝试：原文 → 剥掉 think/代码围栏 → 两种都补转义内嵌引号 → 括号扫描。
+    依次尝试：剥掉 think/围栏后的正文 → 原文 → 补转义内嵌引号 → 括号扫描。
+
+    顺序很重要：必须先剥 think 再解析。思考正文里全是 LaTeX 花括号，
+    直接扫原文会抓到思考里的片段（实测返回只剩 meta 四字段的空壳教案，
+    而且每次落在哪飘忽不定——这就是"抽卡"的根源）。
+    括号扫描取**最长**的合法片段而不是第一个：模型偶尔会在正文外再裹一层
+    对象或注释，第一个片段未必是主结构。
     """
     text = text.strip()
     seen: set[str] = set()
-    for base in (text, _strip_wrapper(text)):
+    for base in (_strip_wrapper(text), text):
         if not base or base in seen:
             continue
         seen.add(base)
@@ -180,11 +221,19 @@ def _extract_json(text: str) -> Any:
             except json.JSONDecodeError:
                 pass
             for opener, closer in (("{", "}"), ("[", "]")):
+                # 取最长的合法片段。注意不能"碰到非空对象就返回"：
+                # 正文前面常有 {"note":"短"} 这类噪声，先返回就会把主结构丢掉，
+                # 只剩一个 note 字段——正是空壳教案的另一种长相。
+                best: tuple[str, Any] | None = None
                 for blob in _scan_blobs(variant, opener, closer):
                     try:
-                        return json.loads(blob)
+                        got = json.loads(blob)
                     except json.JSONDecodeError:
                         continue
+                    if best is None or len(blob) > len(best[0]):
+                        best = (blob, got)
+                if best is not None:
+                    return best[1]
     raise LLMError(f"模型输出里找不到合法 JSON，原始内容前 500 字：\n{text[:500]}")
 
 
@@ -284,7 +333,7 @@ class ModelClient:
     # ------------------------------------------------------------------ 协议
     def _build_payload(self, provider: dict, messages: list[dict[str, Any]], *,
                        temperature: float, max_tokens: int, json_mode: bool,
-                       thinking: str | None) -> dict[str, Any]:
+                       thinking: str | None, stream: bool = False) -> dict[str, Any]:
         model = provider["model"]
         temp = SETTINGS.temperature if temperature is None else temperature
         tokens = max_tokens or SETTINGS.max_tokens
@@ -301,7 +350,7 @@ class ModelClient:
                 "model": model,
                 "max_tokens": tokens,
                 "messages": turns,
-                "stream": False,
+                "stream": stream,
             }
             if system_parts:
                 payload["system"] = "\n\n".join(system_parts)
@@ -314,7 +363,7 @@ class ModelClient:
         payload = {
             "model": model,
             "messages": messages,
-            "stream": False,
+            "stream": stream,
         }
         if temp is not None:
             payload["temperature"] = temp
@@ -341,6 +390,51 @@ class ModelClient:
             text = "".join(b.get("text", "") for b in blocks if isinstance(b, dict) and b.get("type") == "text")
             return text
         return (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+
+    @staticmethod
+    def _parse_stream(provider: dict, lines: Iterable[str]) -> str:
+        """把 SSE 帧拼成完整正文。
+
+        只取最终答案、丢掉思考流：MiniMax 的思考内容走 reasoning_content，
+        老一些的实现走 <think>…</think>，两处都不并进来（有 _strip_think 兜底）。
+        真正要留的只有 choices[0].delta.content（OpenAI 形状）和
+        content_block_delta（Anthropic 形状）。
+        """
+        chunks: list[str] = []
+        anthropic = provider["protocol"] == "anthropic"
+        for raw in lines:
+            line = raw.strip()
+            if not line or line.startswith(":") or not line.startswith("data:"):
+                continue
+            body = line[5:].strip()
+            if not body or body == "[DONE]":
+                continue
+            try:
+                data = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if data.get("error"):
+                raise LLMError(f"流式返回报错：{json.dumps(data['error'], ensure_ascii=False)[:400]}")
+            if anthropic:
+                if data.get("type") == "content_block_delta":
+                    piece = (data.get("delta") or {}).get("text")
+                    if piece:
+                        chunks.append(piece)
+                continue
+            choices = data.get("choices")
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            piece = delta.get("content")
+            if isinstance(piece, str):
+                chunks.append(piece)
+            elif isinstance(piece, list):  # 少数实现把 content 拆成内容块数组
+                for part in piece:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        chunks.append(part["text"])
+        return "".join(chunks)
 
     def _headers(self, provider: dict) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -376,9 +470,10 @@ class ModelClient:
               label: str = "llm") -> str:
         url = self._url(provider)
         headers = self._headers(provider)
+        use_stream = bool(getattr(SETTINGS, "llm_stream", True))
         payload = self._build_payload(
             provider, messages, temperature=temperature, max_tokens=max_tokens,
-            json_mode=json_mode, thinking=thinking,
+            json_mode=json_mode, thinking=thinking, stream=use_stream,
         )
 
         deadline = time.monotonic() + SETTINGS.call_deadline
@@ -414,15 +509,31 @@ class ModelClient:
             ).start()
             started = time.monotonic()
             try:
-                timeout = min(SETTINGS.timeout, max(30.0, deadline - time.monotonic()))
-                with httpx.Client(timeout=httpx.Timeout(timeout)) as client:
-                    resp = client.post(url, headers=headers, json=payload)
-                last_status = resp.status_code
-                if last_status >= 400:
-                    raise LLMError(f"[{last_status}] {resp.text[:600]}")
-                content = self._parse_response(provider, resp.json())
+                budget = min(SETTINGS.timeout, max(30.0, deadline - time.monotonic()))
+                if use_stream:
+                    # 流式：读超时按"多久没收到帧"算，不是整条请求的总时长。
+                    # 只要上游还在推帧就一路续命，思考几分钟也没关系。
+                    timeout = httpx.Timeout(
+                        budget,
+                        read=min(SETTINGS.llm_read_timeout, budget),
+                    )
+                    with httpx.Client(timeout=timeout) as client:
+                        with client.stream("POST", url, headers=headers, json=payload) as resp:
+                            last_status = resp.status_code
+                            if last_status >= 400:
+                                raise LLMError(f"[{last_status}] {resp.read().decode('utf-8', 'replace')[:600]}")
+                            content = self._parse_stream(provider, resp.iter_lines())
+                    empty_hint = "（流式已结束但没有任何内容帧）"
+                else:
+                    with httpx.Client(timeout=httpx.Timeout(budget)) as client:
+                        resp = client.post(url, headers=headers, json=payload)
+                    last_status = resp.status_code
+                    if last_status >= 400:
+                        raise LLMError(f"[{last_status}] {resp.text[:600]}")
+                    content = self._parse_response(provider, resp.json())
+                    empty_hint = json.dumps(resp.json(), ensure_ascii=False)[:300]
                 if not content.strip():
-                    raise LLMError(f"模型返回空内容：{json.dumps(resp.json(), ensure_ascii=False)[:300]}")
+                    raise LLMError(f"模型返回空内容：{empty_hint}")
                 spent = time.monotonic() - started
                 self._note(f"✓ {provider['name']} · {label} 用时 {spent:.0f}s")
                 return content

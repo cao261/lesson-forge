@@ -165,8 +165,12 @@ def compose(
             """把一批返回的知识点例题并进 ex_map（线程安全）。"""
             if not isinstance(part, dict):
                 return
+            try:
+                rows = part.get("knowledge") or []
+            except BaseException:  # noqa: BLE001
+                return
             with ex_lock:
-                for row in part.get("knowledge") or []:
+                for row in rows:
                     if isinstance(row, dict) and row.get("examples"):
                         ex_map[str(row.get("id") or "")] = [
                             e for e in row["examples"] if isinstance(e, dict)
@@ -178,15 +182,19 @@ def compose(
             为什么必须中途存：例题批次要跑好几分钟，中途任何一批全灭
             都会让整个 compose 抛异常，此前骨架那 147 秒的算力就白费了。
             中途存档后重跑能接着用，不用从头再来。
+
+            这里必须吞掉**所有**异常（含 LLMError）。存档是锦上添花，
+            绝不能因为它把整条任务带崩——踩过一次：存档里构造 Lesson 失败，
+            异常一路冒到 run_batches 的 worker，整轮 compose 白跑。
             """
             if not on_partial:
                 return
             try:
                 with ex_lock:
                     merged = _merge_examples(data, dict(ex_map))
-                    on_partial(_to_lesson(merged, meta, kps, duration_min))
-            except Exception:  # noqa: BLE001
-                pass  # 存档是尽力而为，绝不能因为它把主流程带崩
+                on_partial(_to_lesson(merged, meta, kps, duration_min))
+            except BaseException:  # noqa: BLE001
+                return
 
         def _ex_progress(done: int, total: int) -> None:
             say(0.35 + 0.4 * done / total,

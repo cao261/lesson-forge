@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -59,6 +60,20 @@ def _transcript_slice(cues: list[Cue], kps: list[KnowledgePoint]) -> str:
     return "\n".join(f"[{fmt_ts(c.start)}] {c.text}" for c in picked)
 
 
+def _merge_examples(data: object, ex_map: dict[str, list[dict]]) -> dict:
+    """把分批拿到的例题按 kp id 挂回骨架（骨架负责知识点本身）。"""
+    if not ex_map or not isinstance(data, dict):
+        return data if isinstance(data, dict) else {}
+    rows = []
+    for row in data.get("knowledge") or []:
+        if isinstance(row, dict):
+            got = ex_map.get(str(row.get("id") or ""))
+            if got:
+                row = {**row, "examples": got}
+            rows.append(row)
+    return {**data, "knowledge": rows}
+
+
 def _degenerate(lesson: Lesson) -> str:
     """判断这份教案是不是"空壳"。返回空串 = 正常，否则说明哪里塌了。
 
@@ -94,6 +109,7 @@ def compose(
     cues: list[Cue],
     duration_min: float = DEFAULT_DURATION_MIN,
     progress: Progress | None = None,
+    on_partial: Callable[[Lesson], None] | None = None,
 ) -> Lesson:
     client = MiniMaxClient()
     transcript = "\n".join(f"[{fmt_ts(c.start)}] {c.text}" for c in cues)
@@ -143,38 +159,54 @@ def compose(
             except Exception:  # noqa: BLE001
                 return None
 
+        ex_lock = threading.Lock()
+
+        def _harvest(part: object) -> None:
+            """把一批返回的知识点例题并进 ex_map（线程安全）。"""
+            if not isinstance(part, dict):
+                return
+            with ex_lock:
+                for row in part.get("knowledge") or []:
+                    if isinstance(row, dict) and row.get("examples"):
+                        ex_map[str(row.get("id") or "")] = [
+                            e for e in row["examples"] if isinstance(e, dict)
+                        ]
+
+        def _snapshot() -> None:
+            """每批完成就落一份部分草稿。
+
+            为什么必须中途存：例题批次要跑好几分钟，中途任何一批全灭
+            都会让整个 compose 抛异常，此前骨架那 147 秒的算力就白费了。
+            中途存档后重跑能接着用，不用从头再来。
+            """
+            if not on_partial:
+                return
+            try:
+                with ex_lock:
+                    merged = _merge_examples(data, dict(ex_map))
+                    on_partial(_to_lesson(merged, meta, kps, duration_min))
+            except Exception:  # noqa: BLE001
+                pass  # 存档是尽力而为，绝不能因为它把主流程带崩
+
         def _ex_progress(done: int, total: int) -> None:
             say(0.35 + 0.4 * done / total,
                 f"生成例题 {done}/{total} 批完成"
                 + (f"（共 {n_ex} 道，并发 {SETTINGS.llm_parallel} 路）" if total > 1 else ""))
+            _snapshot()
 
         parts = run_batches(
             chunks, _one_ex_batch, label="compose-ex",
             on_progress=_ex_progress, max_workers=SETTINGS.llm_parallel,
         )
         for part in parts:
-            if not isinstance(part, dict):
-                continue
-            for row in part.get("knowledge") or []:
-                if isinstance(row, dict) and row.get("examples"):
-                    ex_map[str(row.get("id") or "")] = [
-                        e for e in row["examples"] if isinstance(e, dict)
-                    ]
+            _harvest(part)
         missing_kps = [kp.id for kp in kps if not ex_map.get(kp.id)]
         if missing_kps:
             say(0.76, f"⚠ {len(missing_kps)} 个知识点的例题这轮没拿到"
                       f"（{'、'.join(missing_kps[:5])}…），会留给规则体检报错")
 
     # 合并：骨架负责知识点，例题分批结果按 kp id 挂回去
-    if ex_map and isinstance(data, dict):
-        rows = []
-        for row in data.get("knowledge") or []:
-            if isinstance(row, dict):
-                got = ex_map.get(str(row.get("id") or ""))
-                if got:
-                    row = {**row, "examples": got}
-                rows.append(row)
-        data = {**data, "knowledge": rows}
+    data = _merge_examples(data, ex_map)
 
     say(0.85, "校对例题与截图的对应关系…")
     lesson = _to_lesson(data, meta, kps, duration_min)

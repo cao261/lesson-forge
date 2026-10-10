@@ -313,7 +313,17 @@ def run_pipeline(
     draft_path = work_dir / "lesson.draft.json"
     lesson = _load_draft(draft_path, lesson_meta, options.reuse, log)
     if lesson is None:
-        lesson = compose.compose(lesson_meta, kps, cues, options.duration_min, rep)
+        # 每批例题完成就落一次盘：中途任何一批全灭都会让 compose 抛异常，
+        # 没有中途存档的话，骨架那几分钟的算力就得白扔。
+        def _save_partial(partial) -> None:
+            try:
+                compose.save(partial, draft_path)
+            except OSError:
+                pass
+
+        lesson = compose.compose(
+            lesson_meta, kps, cues, options.duration_min, rep, on_partial=_save_partial
+        )
         compose.save(lesson, draft_path)
     else:
         rep(1.0, f"复用已有教案草稿：{len(lesson.knowledge)} 知识点 / "

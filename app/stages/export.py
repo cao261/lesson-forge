@@ -60,24 +60,10 @@ def export_docx_both(lesson: Lesson, shots_dir: Path, work_dir: Path) -> tuple[P
     owner = work_dir.name
 
     teacher = build_docx(lesson, shots_dir, _target_path(out_dir, safe, "教师备课版", owner),
-                         work_dir, audience="teacher")
+                         work_dir, audience="teacher", owner=owner)
     student = build_docx(lesson, shots_dir, _target_path(out_dir, safe, "学生讲义", owner),
-                         work_dir, audience="student")
-    _stamp_owner(teacher, owner)
-    _stamp_owner(student, owner)
+                         work_dir, audience="student", owner=owner)
     return teacher, student
-
-
-def _stamp_owner(path: Path, owner: str) -> None:
-    """把"这份属于哪个任务"写进核心属性，供下次 _target_path 判断能否覆盖。"""
-    try:
-        from docx import Document
-
-        doc = Document(str(path))
-        doc.core_properties.category = owner
-        doc.save(str(path))
-    except Exception:  # noqa: BLE001
-        pass
 
 
 # 兼容旧调用点

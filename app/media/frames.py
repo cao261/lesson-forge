@@ -200,6 +200,70 @@ def pick_board_frame(
     return best
 
 
+def _content_mask(img):
+    """画面里"非背景"的像素掩码。课件背景近乎纯色，用四角中位色当基准。"""
+    gray = np.asarray(img.convert("L"), dtype=np.float32)
+    h, w = gray.shape
+    k = max(4, min(h, w) // 40)
+    corners = np.concatenate([
+        gray[:k, :k].ravel(), gray[:k, -k:].ravel(),
+        gray[-k:, :k].ravel(), gray[-k:, -k:].ravel(),
+    ])
+    bg = float(np.median(corners))
+    return (np.abs(gray - bg) > 22.0), bg
+
+
+def _has_camera_corner(img) -> bool:
+    """右下角是不是真的开着老师摄像头窗口。
+
+    以前不管有没有摄像头都按"有"处理，把所有下半幅题目的右边界砍到 0.72。
+    """
+    arr = np.asarray(img, dtype=np.float32)
+    h, w = arr.shape[:2]
+    patch = arr[int(0.58 * h):, int(0.65 * w):]
+    if patch.size == 0:
+        return False
+    # 摄像头窗口是块"与背景明显不同的杂乱方块"，方差大；纯色 PPT 区域方差很小。
+    return float(patch.std()) > 48.0
+
+
+def _grow_to_content(img, left: int, top: int, right: int, bottom: int):
+    """把裁切框向外扩到内容边界：允许跳过少量空白间隙，但只扩不缩。
+
+    模型给的 crop_box 边界经常估偏（实测把「则 sinα > 0」砍成「则 sin」）。
+    与其信它，不如拿它当起点自己找内容：从框边朝外扫，连续空白超过 GAP 就停。
+    最坏结果是留白变多，不会切字。单边扩张上限 MAXGROW，防止遇到水印把整幅都拉进来。
+    """
+    mask, _ = _content_mask(img)
+    h, w = mask.shape
+    cols = mask.sum(axis=0)
+    rows = mask.sum(axis=1)
+
+    gap = 14          # 允许跳过的空白像素：字间距、行间距都在这个量级以内
+    max_w = max(8, int(w * 0.30))
+    max_h = max(8, int(h * 0.30))
+
+    def scan(vals: np.ndarray, start: int, step: int, limit: int, budget: int) -> int:
+        i = start
+        blank = 0
+        while 0 <= i < limit and budget > 0:
+            budget -= 1
+            if vals[i] > 0:
+                blank = 0
+            else:
+                blank += 1
+                if blank > gap:
+                    break
+            i += step
+        return i - step if i != start else start
+
+    new_left = scan(cols, left, -1, 0, max_w)
+    new_right = scan(cols, min(right, w - 1), +1, w, max_w)
+    new_top = scan(rows, top, -1, 0, max_h)
+    new_bottom = scan(rows, min(bottom, h - 1), +1, h, max_h)
+    return (max(0, new_left), max(0, new_top), min(w, new_right + 1), min(h, new_bottom + 1))
+
+
 def crop_problem_image(
     source_path: Path,
     dest_path: Path,
@@ -237,14 +301,20 @@ def crop_problem_image(
                     xmin, xmax = b1, b3
 
                 # 保护性边界扩展：
-                # 1. 横向：题目左侧不能切掉题号（min 靠左），右侧往往有选项或图形（拓展至至少 0.88，避开右下角摄像头窗口）
+                # 1. 横向：题目左侧不能切掉题号（min 靠左），右侧往往有选项或图形
                 xmin = max(0.0, min(xmin, 0.05))
                 if ymax < 0.65:
                     # 上半部分无教师摄像头，右侧可完全包含题目和选项
                     xmax = min(0.98, max(xmax, 0.88))
                 else:
-                    # 下半部分避开右下角讲师人像（x > 0.70）
-                    xmax = min(0.72, max(xmax, 0.65))
+                    # 下半部分要避开右下角讲师人像。**但只在那一角真的有人像时才收**——
+                    # 以前这里不看画面就一刀切到 0.72，把上半幅里横排题干的**后半句**
+                    # 直接砍没了（实测 ex8「则 sinα > 0」只剩「则 sin」）。
+                    # 题干是横排的，它伸到哪儿跟它在不在下半幅毫无关系。
+                    if _has_camera_corner(img):
+                        xmax = min(0.72, max(xmax, 0.65))
+                    else:
+                        xmax = min(0.98, max(xmax, 0.88))
 
                 # 2. 纵向：保留适度上下留白
                 ymin = max(0.0, ymin - 0.02)
@@ -254,6 +324,11 @@ def crop_problem_image(
                 left = max(0, int(xmin * w) - padding)
                 bottom = min(h, int(ymax * h) + padding)
                 right = min(w, int(xmax * w) + padding)
+
+                # 模型给的框只是"大致范围"，边界估得不准就会把题干切掉半截。
+                # 这里从它出发向外找内容，碰到连续空白才停——只增不减，
+                # 最坏情况是留白多一点，绝不会再切掉一个字。
+                left, top, right, bottom = _grow_to_content(img, left, top, right, bottom)
 
                 if (right - left) >= 64 and (bottom - top) >= 48:
                     cropped = img.crop((left, top, right, bottom))

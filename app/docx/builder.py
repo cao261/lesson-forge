@@ -23,6 +23,14 @@ BODY_FONT = "宋体"
 HEAD_FONT = "微软雅黑"
 LATIN_FONT = "Times New Roman"
 
+# ---- 图片排版 ----
+# 所有题图/板书图共用同一个尺寸框，版面才齐（见 _fit_box）。
+IMG_MAX_W = 5.5
+IMG_MAX_H = 3.0
+# 放大上限（PPI）。截图都出自同一帧视频，按固定 PPI 折算，图里的字在
+# 题与题之间就是同一个物理大小；不给上限的话低清小裁切会被拉糊。
+MAX_PPI = 110.0
+
 MATH_PARA_HEAD = '<m:oMathPara xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>'
 
 
@@ -36,10 +44,13 @@ class DocxBuilder:
     """
 
     def __init__(self, lesson: Lesson, shots_dir: Path, work_dir: Path,
-                 audience: str = "teacher") -> None:
+                 audience: str = "teacher", owner: str = "") -> None:
         self.lesson = lesson
         self.shots_dir = shots_dir
         self.audience = audience
+        # owner = 产出这份文档的任务名，写进核心属性。成品目录是跨任务共用的，
+        # 靠它判断"这份是不是同一个任务产的"，决定能不能覆盖同名文件。
+        self.owner = owner
         self.formula_dir = work_dir / "_formulas"
         self.formula_dir.mkdir(parents=True, exist_ok=True)
         self._formula_seq = 0
@@ -109,7 +120,32 @@ class DocxBuilder:
         self.add_rich(para, text)
         return para
 
-    def _image(self, filename: str | None, caption: str = "", max_width: float = 5.6):
+    def _fit_box(self, path: Path, max_width: float, max_height: float) -> tuple[float, float]:
+        """把图片等比缩放进统一尺寸的框，返回 (宽英寸, 高英寸)。
+
+        两条规则取更严的：
+        1. 等比内缩进 max_width × max_height —— 所有图占的版面一样，版面才齐。
+        2. 放大上限 MAX_PPI —— 截图都来自同一帧视频，按固定 PPI 折算，
+           画面里的字在题与题之间就是同一个物理大小；没有这条的话，
+           一张低清小裁切会被拉到半页宽，糊得看不清。
+
+        取不到尺寸就退回按宽度插图，行为和以前一致。
+        """
+        try:
+            from PIL import Image
+
+            with Image.open(path) as im:
+                w_px, h_px = im.size
+        except Exception:  # noqa: BLE001
+            return max_width, 0.0
+        if not w_px or not h_px:
+            return max_width, 0.0
+
+        scale = min(max_width / w_px, max_height / h_px, 1.0 / MAX_PPI)
+        return round(w_px * scale, 2), round(h_px * scale, 2)
+
+    def _image(self, filename: str | None, caption: str = "", max_width: float = IMG_MAX_W,
+               max_height: float = IMG_MAX_H):
         if not filename:
             return
         path = self.shots_dir / filename
@@ -127,26 +163,24 @@ class DocxBuilder:
         if not path.exists():
             return
         try:
-            # 根据宽高比自适应排版宽度，既保证清晰大图，又避免纵向撑爆页面
-            target_width = max_width
-            try:
-                from PIL import Image
-                with Image.open(path) as im:
-                    aspect = im.size[0] / max(1, im.size[1])
-                    if aspect < 1.0:
-                        target_width = min(max_width, round(3.6 * aspect, 2))
-                    elif aspect < 1.35:
-                        target_width = min(max_width, 4.6)
-                    else:
-                        target_width = min(max_width, 5.4 if self.is_student else 5.2)
-            except Exception:  # noqa: BLE001
-                pass
+            # 统一图片框 + 等比内缩。以前是按宽高比分三档给宽度、**不管高度**，
+            # 1188×295 的横条和 650×557 的方图贴出来一大一小，版面很不齐。
+            # 现在所有图都等比缩放进同一个框，版面才统一。
+            #
+            # 再加一条放大上限：截图源自同一帧视频，按固定 PPI 折算，
+            # 画面里的字在题与题之间就是同一个物理大小；不给上限的话，
+            # 一张 300px 的小裁切会被拉到 4.5 英寸宽，糊得看不清。
+            target_width, target_height = self._fit_box(path, max_width, max_height)
 
             para = self.doc.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             para.paragraph_format.space_before = Pt(4)
             para.paragraph_format.space_after = Pt(2)
-            para.add_run().add_picture(str(path), width=Inches(target_width))
+            run = para.add_run()
+            if target_height:
+                run.add_picture(str(path), width=Inches(target_width), height=Inches(target_height))
+            else:
+                run.add_picture(str(path), width=Inches(target_width))
         except Exception:  # noqa: BLE001
             return
         if caption:
@@ -280,6 +314,10 @@ class DocxBuilder:
             self._footer_note()
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        # 归属任务名必须在这次 save 里一次性写进去。绝不要"存完再打开改一次属性存回去"，
+        # 那样等于让 python-docx 重新序列化一遍包里的 XML，含图片的文档会被它弄坏命名空间。
+        if self.owner:
+            self.doc.core_properties.category = self.owner
         self.doc.save(str(out_path))
         return out_path
 
@@ -368,7 +406,7 @@ class DocxBuilder:
                     for line in (self._c(ex.statement_latex or ex.statement_plain)).split("\n"):
                         if line.strip():
                             self._p(line.strip(), indent=0.2)
-                    self._image(ex.shot, f"{ex.id} 题目图", max_width=5.2)
+                    self._image(ex.shot, f"{ex.id} 题目图")
                     self._add_practice_box(lines=5)
 
     def _homework_student(self) -> None:
@@ -594,6 +632,16 @@ class DocxBuilder:
                 if line_str:
                     self._p(line_str, indent=0.25)
         self._image(ex.shot, f"{ex.id} 题目原图")
+        if not ex.shot and not ex.verified:
+            # 没贴图不是因为漏了，是多模态确认过这几帧里根本没有题目。
+            # 什么都不印的话老师根本看不出这里缺东西，得明说。
+            hint = self._p(indent=0.15)
+            hr = hint.add_run(f"［{ex.id}］视频画面里没有这道题的题图，请老师自行截图补上")
+            hr.font.size = Pt(8.5)
+            hr.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+            hr.font.name = LATIN_FONT
+            hr._element.rPr.rFonts.set(qn("w:eastAsia"), BODY_FONT)
+            hint.paragraph_format.space_after = Pt(2)
 
         # 4. 参考答案
         if ex.answer:
@@ -772,8 +820,8 @@ def _set_cell(cell, text: str, bold: bool = False, shade: str | None = None) -> 
 
 
 def build_docx(lesson: Lesson, shots_dir: Path, out_path: Path, work_dir: Path,
-               audience: str = "teacher") -> Path:
-    return DocxBuilder(lesson, shots_dir, work_dir, audience=audience).build(out_path)
+               audience: str = "teacher", owner: str = "") -> Path:
+    return DocxBuilder(lesson, shots_dir, work_dir, audience=audience, owner=owner).build(out_path)
 
 
 def build_both(lesson: Lesson, shots_dir: Path, work_dir: Path,

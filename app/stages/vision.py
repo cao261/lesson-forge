@@ -208,10 +208,12 @@ def transcribe_examples(
 
         if accepted is None:
             ex.verified = False
-            clean_name = f"{ex.id}_clean.jpg"
-            clean_path = shots_dir / clean_name
-            crop_problem_image(frames[0], clean_path)
-            ex.shot = clean_name if clean_path.exists() else frames[0].name
+            # 一张都认不出来，就**不要贴图**。
+            # 以前这里无条件拿 frames[0] 当例题图，于是模型明说"画面里没有题目"
+            # 的帧照样进了教案：实测 ex1 贴进去的是老师手画的对比插图、
+            # ex2 贴进去的是章节标题卡，花花绿绿一张，跟题目毫无关系，
+            # 比不贴更糟——老师还得分辨"这张为什么配这道题"。
+            ex.shot = None
             ex.shot_confidence = 0.0
             if failures == len(frames):
                 ex.notes = _merge_notes(
@@ -219,8 +221,12 @@ def transcribe_examples(
                     f"⚠ 看图转写调用失败（{len(frames)} 张）：" + "；".join(rejects[:2]),
                 )
             else:
-                ex.notes = _merge_notes(ex.notes, "⚠ 未确认到完整题目：" + "；".join(rejects[:3]))
-            return False, f"⚠ {ex.id} 转写未确认"
+                ex.notes = _merge_notes(
+                    ex.notes,
+                    "⚠ 没有截到能确认的题目画面（" + "；".join(rejects[:2]) +
+                    "），本题需老师自行从视频截图补充",
+                )
+            return False, f"⚠ {ex.id} 未找到可用的题目画面"
 
         data, frame, statement = accepted
         _apply(ex, data, frame, statement, shots_dir=shots_dir)

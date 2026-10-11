@@ -246,6 +246,19 @@ def compose(
 # 免得模型把例题塞进 knowledge 就凭空造出一条空知识点。
 _EXAMPLE_ID = re.compile(r"^ex\d+$", re.IGNORECASE)
 
+# shot 必须是个真实的图片文件名。提示词里给模型看的是
+# `截图文件={ex.shot or '（未获取到）'}`，模型很容易把「（未获取到）」这个
+# 占位说明当成文件名原样抄回 JSON——实测 8 道例题里有 5 道 shot 变成这句中文。
+# 后果不只是脏数据：shot 非空会让「没有题图、请老师自行截图」的提示
+# 完全不触发，老师只看到一片空白，既不知道图缺了也不知道为什么缺。
+_SHOT_NAME = re.compile(r"^[\w.\-]+\.(?:jpg|jpeg|png|webp)$", re.IGNORECASE)
+
+
+def _clean_shot(value) -> str:
+    """只认干净的图片文件名；占位符、路径、说明文字一律当作"没有截图"。"""
+    name = str(value or "").strip()
+    return name if _SHOT_NAME.match(name) else ""
+
 
 def _to_lesson(
     data: dict,
@@ -430,9 +443,12 @@ def _to_lesson(
             else:
                 target.tags = list(pv("tags", []) or [])
 
-            shot = str(raw_ex.get("shot") or "").strip()
+            shot = _clean_shot(raw_ex.get("shot"))
             if shot:
                 target.shot = shot
+            elif str(raw_ex.get("shot") or "").strip():
+                # 模型把占位说明当文件名抄回来了，别让它留在数据里
+                target.shot = ""
         merged.append(base)
 
     # 模型没提到的知识点也要补回来（保证例题不丢）。

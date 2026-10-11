@@ -31,6 +31,10 @@ IMG_MAX_H = 3.0
 # 题与题之间就是同一个物理大小；不给上限的话低清小裁切会被拉糊。
 MAX_PPI = 110.0
 
+# 截图文件名。shot 字段是模型参与写出来的，偶尔会把提示词里的占位说明
+# （「（未获取到）」这类）当成文件名存进来，字段非空但根本没有对应的图。
+_SHOT_NAME = re.compile(r"^[\w.\-]+\.(?:jpg|jpeg|png|webp)$", re.IGNORECASE)
+
 MATH_PARA_HEAD = '<m:oMathPara xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>'
 
 
@@ -143,6 +147,16 @@ class DocxBuilder:
 
         scale = min(max_width / w_px, max_height / h_px, 1.0 / MAX_PPI)
         return round(w_px * scale, 2), round(h_px * scale, 2)
+
+    def _shot_ok(self, ex) -> bool:
+        """这张例题到底有没有可用的题图。
+
+        不能只看 ex.shot 非空：上游偶尔会把「（未获取到）」这种提示词占位说明
+        当成文件名存进来（模型照抄），字段非空但根本没有对应的图。
+        以「像不像文件名」为准。
+        """
+        name = str(getattr(ex, "shot", "") or "").strip()
+        return bool(_SHOT_NAME.match(name))
 
     def _image(self, filename: str | None, caption: str = "", max_width: float = IMG_MAX_W,
                max_height: float = IMG_MAX_H):
@@ -632,7 +646,7 @@ class DocxBuilder:
                 if line_str:
                     self._p(line_str, indent=0.25)
         self._image(ex.shot, f"{ex.id} 题目原图")
-        if not ex.shot and not ex.verified:
+        if not self._shot_ok(ex) and not ex.verified:
             # 没贴图不是因为漏了，是多模态确认过这几帧里根本没有题目。
             # 什么都不印的话老师根本看不出这里缺东西，得明说。
             hint = self._p(indent=0.15)

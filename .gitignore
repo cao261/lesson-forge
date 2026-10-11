@@ -10,6 +10,9 @@ __pycache__/
 .env
 .env.*
 !.env.example
+# B 站登录态。curl 从浏览器抓下来的 cookie 等于账号凭据，
+# 进了 git 历史就等于泄露，删文件也删不掉，只能改密码。
+*cookies*.txt
 
 # ---- 素材与产物（体积大，且是老师的私有内容）----
 workspace/
@@ -22,9 +25,11 @@ selfcheck_out/
 *.part
 *.docx
 *.html
+!app/web/static/*.html
 
 # ---- 本地临时探针（下划线开头是排查问题时的一次性脚本）----
 /_*.py
+/_bili_*.json
 
 # ---- 工具链落下的临时文件 ----
 /_gh_login_*.txt

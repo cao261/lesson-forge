@@ -251,11 +251,12 @@ def _transcribe_once(
     if language in {"auto", ""}:
         language = None
 
+    beam_sz = int(os.getenv("WHISPER_BEAM_SIZE", "2"))
     segments, info = model.transcribe(
         str(audio),
         language=language,
         task="transcribe",
-        beam_size=5,
+        beam_size=beam_sz,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 400},
         word_timestamps=True,

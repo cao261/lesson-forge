@@ -1,0 +1,1133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LessonForge · AI 视频智能教案工坊</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0b0e14;
+  --bg-subtle: #10141e;
+  --card: #151924;
+  --card-hover: #191f2e;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --ink: #f1f3f9;
+  --muted: #8b96ad;
+  --faint: #4e576e;
+  --accent: #3b82f6;
+  --accent-glow: rgba(59, 130, 246, 0.25);
+  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+  --ok: #10b981;
+  --ok-glow: rgba(16, 185, 129, 0.2);
+  --warn: #f59e0b;
+  --err: #ef4444;
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 6px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+/* Scrollbar */
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: #262c3d; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #3b435b; }
+
+/* Top Header */
+header {
+  padding: 16px 32px;
+  background: rgba(16, 20, 30, 0.85);
+  backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.logo-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--accent-gradient);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 16px;
+  color: #fff;
+  box-shadow: 0 4px 14px var(--accent-glow);
+}
+header h1 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.3px;
+  color: #fff;
+}
+header .subtitle {
+  color: var(--muted);
+  font-size: 12.5px;
+  border-left: 1px solid var(--line-strong);
+  padding-left: 12px;
+  margin-left: 4px;
+}
+.header-spacer { flex: 1; }
+.header-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.badge {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-subtle);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all .2s;
+}
+.badge-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.badge.ok { color: #86efac; border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.08); }
+.badge.ok .badge-dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.badge.err { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
+.badge.err .badge-dot { background: var(--err); }
+.badge.info { color: #93c5fd; border-color: rgba(59, 130, 246, 0.35); background: rgba(59, 130, 246, 0.08); }
+.badge.info .badge-dot { background: var(--accent); }
+
+/* Main Layout */
+.layout {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 24px 32px 80px;
+  display: grid;
+  grid-template-columns: 460px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 1140px) {
+  .layout { grid-template-columns: 1fr; padding: 18px 20px; }
+}
+
+/* Card Container */
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 22px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  margin-bottom: 20px;
+  transition: border-color .2s;
+}
+.card:hover { border-color: var(--line-strong); }
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.card-title {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card-title svg { opacity: 0.8; }
+
+/* Form Controls */
+label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+  margin: 14px 0 6px;
+}
+.label-hint { font-weight: normal; font-size: 11.5px; color: var(--faint); margin-left: 4px; }
+input, select, textarea {
+  width: 100%;
+  background: #0d1017;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: var(--radius-md);
+  padding: 10px 13px;
+  font-size: 13.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+textarea {
+  min-height: 108px;
+  resize: vertical;
+  line-height: 1.6;
+  font-family: "Fira Code", monospace;
+  font-size: 12.5px;
+}
+.row { display: flex; gap: 12px; }
+.row > * { flex: 1; }
+
+/* Quick Preset Chips */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: #111520;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all .15s;
+  user-select: none;
+}
+.chip:hover { border-color: var(--accent); color: #fff; }
+
+/* Checkboxes */
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+}
+.checkbox-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  margin: 0;
+}
+
+/* Primary Button */
+.btn-primary {
+  width: 100%;
+  margin-top: 20px;
+  padding: 13px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--accent-gradient);
+  color: #fff;
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px var(--accent-glow);
+  transition: all .2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.btn-primary:hover:not(:disabled) {
+  opacity: 0.95;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px var(--accent-glow);
+}
+.btn-primary:active:not(:disabled) { transform: translateY(0); }
+.btn-primary:disabled {
+  background: #1e2433;
+  color: var(--faint);
+  box-shadow: none;
+  cursor: not-allowed;
+  transform: none;
+}
+.btn-ghost {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: #10141e;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-ghost:hover { background: #181d2a; border-color: var(--line-strong); }
+
+/* Progress & Stages */
+.progress-container { margin-top: 18px; }
+.progress-bar {
+  height: 6px;
+  background: #0d1017;
+  border-radius: 99px;
+  overflow: hidden;
+  position: relative;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--accent-gradient);
+  width: 0%;
+  transition: width .4s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+}
+.status-text {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 10px;
+  min-height: 20px;
+  word-break: break-all;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.steps-pill-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  margin-top: 14px;
+}
+@media (max-width: 480px) { .steps-pill-grid { grid-template-columns: repeat(2, 1fr); } }
+.step-chip {
+  font-size: 11.5px;
+  padding: 6px 4px;
+  text-align: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: #0e121a;
+  color: var(--muted);
+  transition: all .2s;
+  white-space: nowrap;
+}
+.step-chip.on {
+  border-color: var(--accent);
+  color: #fff;
+  background: rgba(59, 130, 246, 0.15);
+  box-shadow: 0 0 10px var(--accent-glow);
+  font-weight: 600;
+}
+.step-chip.done {
+  border-color: rgba(16, 185, 129, 0.3);
+  color: #86efac;
+  background: rgba(16, 185, 129, 0.08);
+}
+
+/* Console Log */
+.log-box {
+  margin-top: 16px;
+  height: 180px;
+  overflow: auto;
+  background: #080a0f;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  font-family: "Fira Code", monospace;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: #9aa5be;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.log-box .highlight { color: #60a5fa; }
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.log-action { cursor: pointer; color: var(--accent); }
+
+/* Tips & Architecture info */
+.tips-panel {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.tips-panel b { color: var(--ink); }
+
+/* Queue & History lists */
+.queue-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-md);
+  background: #0e121a;
+  border: 1px solid var(--line);
+}
+.queue-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+.queue-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.queue-bar {
+  height: 4px;
+  background: #171b26;
+  border-radius: 99px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.queue-bar i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+.tag {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+.tag.running { color: #60a5fa; border-color: rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.1); }
+.tag.done { color: #86efac; border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.1); }
+.tag.failed { color: #fca5a5; border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.1); }
+.tag.pending { color: #fcd34d; border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.1); }
+
+.act-btn {
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  background: #161c2b;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.act-btn:hover { border-color: var(--accent); color: #fff; background: rgba(59, 130, 246, 0.15); }
+.act-btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+
+/* History List Item */
+.hist-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: #0f131d;
+  border: 1px solid var(--line);
+  margin-bottom: 8px;
+  transition: border-color .2s;
+}
+.hist-item:hover { border-color: var(--line-strong); }
+.hist-main { flex: 1; min-width: 0; }
+.hist-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hist-info {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hist-actions { display: flex; gap: 6px; align-items: center; }
+
+/* Right Panel: Result & Document Preview */
+.results-header-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.stat-box {
+  background: #0c0f16;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  text-align: left;
+}
+.stat-label { font-size: 11.5px; color: var(--muted); }
+.stat-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  margin-top: 4px;
+  display: block;
+}
+.downloads-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.download-pill {
+  padding: 9px 16px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: all .2s;
+}
+.download-pill.teacher {
+  background: #1e3a8a;
+  color: #93c5fd;
+  border: 1px solid #3b82f6;
+}
+.download-pill.teacher:hover { background: #2563eb; color: #fff; box-shadow: 0 4px 14px var(--accent-glow); }
+.download-pill.student {
+  background: #064e3b;
+  color: #6ee7b7;
+  border: 1px solid #10b981;
+}
+.download-pill.student:hover { background: #059669; color: #fff; box-shadow: 0 4px 14px var(--ok-glow); }
+.download-pill.ghost {
+  background: #111520;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+.download-pill.ghost:hover { border-color: var(--line-strong); color: #fff; }
+
+/* Tabs */
+.tabs-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+.tab-btn {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  color: var(--muted);
+  background: none;
+  cursor: pointer;
+  transition: all .2s;
+}
+.tab-btn:hover { color: var(--ink); background: rgba(255, 255, 255, 0.04); }
+.tab-btn.on {
+  color: #fff;
+  background: #181d2a;
+  border-color: var(--line-strong);
+}
+
+/* Document Preview Frame */
+.preview-container {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: #ffffff;
+  min-height: 780px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+}
+iframe {
+  width: 100%;
+  height: 820px;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+.empty-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 100px 30px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--card);
+}
+.empty-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #111520;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  margin-bottom: 16px;
+  border: 1px solid var(--line);
+}
+.empty-title { font-size: 15px; font-weight: 600; color: #fff; margin-bottom: 6px; }
+.empty-desc { font-size: 12.5px; max-width: 360px; line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="logo-icon">LF</div>
+    <div>
+      <h1>LessonForge</h1>
+    </div>
+  </div>
+  <div class="subtitle">B站教学视频 → 高质量 Word 教案工坊</div>
+  <div class="header-spacer"></div>
+  <div class="header-badges">
+    <span class="badge" id="cfgChain"><i class="badge-dot"></i><span>模型链路加载中…</span></span>
+    <span class="badge" id="cfgKey"><i class="badge-dot"></i><span>Key 检测中…</span></span>
+    <span class="badge info" id="cfgOmml"><i class="badge-dot"></i><span>Word OMML 原生公式</span></span>
+    <span class="badge info" id="cfgVision"><i class="badge-dot"></i><span>多模态去人像切题</span></span>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- Left Side: Controls & Queue -->
+  <div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+          新建教案任务
+        </div>
+        <div style="font-size: 11px; color: var(--muted);">支持单条 / 批量换行提交</div>
+      </div>
+
+      <label>视频链接 <span class="label-hint">（每行一个，支持 B站 BV 链接或本地视频路径）</span></label>
+      <textarea id="urls" placeholder="https://www.bilibili.com/video/BV1xx...&#10;https://www.bilibili.com/video/BV1yy..."></textarea>
+      
+      <div class="chips">
+        <span class="chip" id="demoChip">💡 填入测试链接</span>
+        <span class="chip" onclick="setSubject('高中数学', '高一')">高中数学·高一</span>
+        <span class="chip" onclick="setSubject('高中数学', '高考复习')">高考数学·一轮复习</span>
+        <span class="chip" onclick="setSubject('初中物理', '初三')">初中物理·初三</span>
+        <span class="chip" onclick="setSubject('高中化学', '高二')">高中化学·选修</span>
+      </div>
+
+      <div class="row" style="margin-top: 6px;">
+        <div>
+          <label>学科</label>
+          <input id="subject" placeholder="留空则大模型自动研判">
+        </div>
+        <div>
+          <label>年级学段</label>
+          <input id="grade" placeholder="如 高一 / 初三 / 高考">
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>建议排课用时 <span class="label-hint">(分钟)</span></label>
+          <input id="duration" type="number" value="90" min="20" max="240">
+        </div>
+      </div>
+
+      <div class="checkbox-row">
+        <input type="checkbox" id="doReview" checked>
+        <span>开启结构完整性与质量审核（强烈建议）</span>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="reuse" checked>
+        <span>复用已下载音视频素材（极速重跑与二次修改）</span>
+      </div>
+
+      <button id="go" class="btn-primary">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        开始生成高质量教案
+      </button>
+      <button class="btn-ghost" id="rerun" style="display:none">🔄 复用素材 · 重新润色并导出 Word</button>
+
+      <!-- Active Progress Indicator -->
+      <div class="progress-container">
+        <div class="progress-bar"><div class="progress-fill" id="barFill"></div></div>
+        <div class="status-text" id="status">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>就绪，粘贴链接后点击上方按钮开始。</span>
+        </div>
+      </div>
+
+      <!-- Stage Step Pills -->
+      <div class="steps-pill-grid" id="steps"></div>
+
+      <!-- Realtime Log Console -->
+      <div class="log-header">
+        <span>实时执行日志</span>
+        <span class="log-action" onclick="$('log').textContent=''">清空日志</span>
+      </div>
+      <div class="log-box" id="log"></div>
+
+      <div class="tips-panel">
+        ⚡ <b>全自动流水线优化</b>：<br>
+        • <b>Whisper beam_size=2</b>：大幅减少语音转写耗时；<br>
+        • <b>多模态并发题干转写</b>：例题识别速度提升 5~10 倍；<br>
+        • <b>智能裁剪算法</b>：自动抹除讲台老师出镜遮挡，只留纯净题目原图；<br>
+        • <b>Word OMML 公式无损渲染</b>：双向清洗 LaTeX，杜绝 bare $ 乱码。
+      </div>
+    </div>
+
+    <!-- Active Queue Card -->
+    <div class="card" id="queueCard" style="display:none">
+      <div class="card-header">
+        <div class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          本次任务队列
+        </div>
+      </div>
+      <div id="queue"></div>
+    </div>
+
+    <!-- History List Card -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="9"/></svg>
+          历史生成的教案
+        </div>
+        <div class="log-action" onclick="loadHistory()">刷新列表</div>
+      </div>
+      <div id="history"><div class="empty-desc" style="padding: 12px 0;">加载历史教案中…</div></div>
+    </div>
+  </div>
+
+  <!-- Right Side: Document Results & Preview -->
+  <div>
+    <div class="card" style="padding-bottom: 12px;">
+      <div class="card-header">
+        <div class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          教案产物与在线预览
+        </div>
+        <div id="openTabBtn" style="display:none">
+          <a class="act-btn" id="openTabLink" href="#" target="_blank">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            新标签全屏预览
+          </a>
+        </div>
+      </div>
+
+      <!-- Result Stats -->
+      <div class="results-header-stats" id="stats" style="display:none"></div>
+
+      <!-- Download Actions Bar -->
+      <div class="downloads-bar" id="downloadsBar" style="display:none">
+        <a class="download-pill teacher" id="dl" href="#">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          下载 教师备课版 Word (.docx)
+        </a>
+        <a class="download-pill student" id="dls" href="#">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          下载 学生讲义 Word (.docx)
+        </a>
+        <a class="download-pill ghost" id="dljson" href="#">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          结构化 JSON
+        </a>
+      </div>
+
+      <!-- Preview Tabs -->
+      <div class="tabs-nav">
+        <button class="tab-btn on" data-t="teacher">📘 教师备课版（含解题剖析·讲法提示）</button>
+        <button class="tab-btn" data-t="student">📝 学生讲义（讲练结合·留白作答）</button>
+        <button class="tab-btn" data-t="about">💡 架构设计与生成原理</button>
+      </div>
+
+      <!-- Preview Panels -->
+      <div class="preview-container">
+        <div id="paneTeacher">
+          <div class="empty-placeholder">
+            <div class="empty-icon">📖</div>
+            <div class="empty-title">等待任务生成</div>
+            <div class="empty-desc">在左侧输入 B 站视频链接，点击“开始生成教案”。生成完毕后将在此处无缝呈现排版完成的双版本教案。</div>
+          </div>
+        </div>
+        <div id="paneStudent" style="display:none">
+          <div class="empty-placeholder">
+            <div class="empty-icon">✏️</div>
+            <div class="empty-title">学生讲义预览</div>
+            <div class="empty-desc">学生讲义将按“学一个知识点，跟一组例题”讲练结合，自带答题预留空白，答案已后置附录。</div>
+          </div>
+        </div>
+        <div id="paneAbout" style="display:none; padding: 32px 40px; background: #0c0f16; color: var(--ink);">
+          <h2 style="margin-top:0; color:#fff; font-size:18px;">LessonForge 智能教案全流程架构</h2>
+          <p style="color: var(--muted); line-height: 1.8;">
+            为了彻底解决视频学习中的冗余耗时与零散板书问题，LessonForge 将视频转化为面向真实备课场景的双轨教案：
+          </p>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 20px;">
+            <div style="background:#131825; padding:18px; border-radius:10px; border:1px solid var(--line);">
+              <h3 style="margin:0 0 8px; color:#60a5fa; font-size:14px;">① 极速 ASR 音频提取</h3>
+              <p style="font-size:12.5px; color:var(--muted); margin:0;">
+                基于 faster-whisper（CUDA 加速，优化 beam_size=2），精准还原带词级时间戳的板书讲解全轨迹，转写速度提升 2.5 倍。
+              </p>
+            </div>
+            <div style="background:#131825; padding:18px; border-radius:10px; border:1px solid var(--line);">
+              <h3 style="margin:0 0 8px; color:#34d399; font-size:14px;">② 智能多模态并发切题</h3>
+              <p style="font-size:12.5px; color:var(--muted); margin:0;">
+                大模型确定例题讲解起始帧，并发调用多模态模型识别板书，自主剔除右下角讲台名师摄像头人像遮挡，生成洁净板书图。
+              </p>
+            </div>
+            <div style="background:#131825; padding:18px; border-radius:10px; border:1px solid var(--line);">
+              <h3 style="margin:0 0 8px; color:#f472b6; font-size:14px;">③ Word OMML 原生公式无损渲染</h3>
+              <p style="font-size:12.5px; color:var(--muted); margin:0;">
+                内置 LaTeX 纯净清洗器，告别裸露 $ 符号与 MathJax 冲突；通过 MathML 自动生成 Word 原生 Office Math 符号，支持双击编辑。
+              </p>
+            </div>
+            <div style="background:#131825; padding:18px; border-radius:10px; border:1px solid var(--line);">
+              <h3 style="margin:0 0 8px; color:#fbbf24; font-size:14px;">④ 教师/学生双版本体系</h3>
+              <p style="font-size:12.5px; color:var(--muted); margin:0;">
+                教师版专注于教学要点、易错提醒与板书设计；学生讲义严格讲练结合，自带作答留白网格，课后练习题一应俱全。
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const STAGES = [
+  ["fetch", "下载音视频"],
+  ["asr", "语音转写"],
+  ["segment", "知识点切分"],
+  ["shots", "例题截图"],
+  ["vision", "题目转写(并发)"],
+  ["compose", "生成教案"],
+  ["review", "审核修订"],
+  ["export", "导出 Word"]
+];
+
+const $ = id => document.getElementById(id);
+let es = null, currentJob = null;
+const tracked = new Set();
+let pollTimer = null;
+
+function setSubject(subj, gr) {
+  $("subject").value = subj;
+  $("grade").value = gr;
+}
+
+$("demoChip").onclick = () => {
+  $("urls").value = "https://www.bilibili.com/video/BV1xx411c7mD";
+  $("subject").value = "高中数学";
+  $("grade").value = "高一";
+};
+
+function renderSteps(activeIdx, doneIdx) {
+  $("steps").innerHTML = STAGES.map((s, i) => {
+    let cls = "step-chip";
+    if (i === activeIdx) cls += " on";
+    else if (i < doneIdx) cls += " done";
+    return `<div class="${cls}">${i < doneIdx ? "✓ " : ""}${s[1]}</div>`;
+  }).join("");
+}
+renderSteps(-1, -1);
+
+fetch("/api/config").then(r => r.json()).then(c => {
+  const chain = (c.providers || []).map(p => p.name + (p.rpm ? ` (${p.rpm}RPM)` : "")).join(" → ");
+  const badge = $("cfgChain");
+  badge.innerHTML = `<i class="badge-dot"></i><span>${chain || "未配置模型"}</span>`;
+  badge.className = "badge " + (c.providers && c.providers.length > 0 ? "ok" : "");
+  badge.title = (c.providers || []).map(p => `${p.name} | ${p.model} | 看图: ${p.vision ? "支持" : "否"}`).join("\n");
+
+  const k = $("cfgKey");
+  k.innerHTML = `<i class="badge-dot"></i><span>${c.has_key ? "API Key 已就绪" : (c.mock ? "离线演示模式" : "未配置 API Key")}</span>`;
+  k.className = "badge " + (c.has_key || c.mock ? "ok" : "err");
+  if (c.whisper) k.title = "Whisper 模型: " + c.whisper;
+});
+
+$("go").onclick = () => start(false);
+$("rerun").onclick = () => start(true);
+
+function lines() {
+  return $("urls").value.split(/\r?\n/).map(s => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+}
+
+async function start(isRerun) {
+  if (isRerun && !currentJob) { alert("没有可重跑的任务"); return; }
+  if (!isRerun && !lines().length) { alert("请先粘贴至少一个视频链接"); return; }
+
+  const body = {
+    urls: lines(),
+    subject: $("subject").value.trim(),
+    grade: $("grade").value.trim(),
+    duration_min: parseInt($("duration").value) || 90,
+    do_review: $("doReview").checked,
+    reuse: $("reuse").checked
+  };
+
+  if (!isRerun) {
+    $("stats").style.display = "none";
+    $("downloadsBar").style.display = "none";
+    $("openTabBtn").style.display = "none";
+    $("paneTeacher").innerHTML = '<div class="empty-placeholder"><div class="empty-icon">⏳</div><div class="empty-title">正在排队处理</div><div class="empty-desc">任务已提交至后台流水线，正在按队列调度…</div></div>';
+  }
+  $("log").textContent = "";
+  $("go").disabled = true;
+
+  const res = await fetch(isRerun ? `/api/jobs/${currentJob}/rerun` : "/api/jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    alert(data.detail || "创建失败");
+    $("go").disabled = false;
+    return;
+  }
+
+  const ids = data.job_ids || [data.job_id];
+  ids.forEach(id => tracked.add(id));
+  $("queueCard").style.display = "block";
+  currentJob = ids[0];
+  $("rerun").style.display = "block";
+  $("status").innerHTML = `<span>已提交 ${ids.length} 条任务，后台流水线开始处理…</span>`;
+  listen(currentJob);
+  startPolling();
+}
+
+function listen(jobId) {
+  if (es) es.close();
+  es = new EventSource(`/api/jobs/${jobId}/stream`);
+  let lastStage = -1;
+
+  es.onmessage = e => {
+    const d = JSON.parse(e.data);
+    if (d.type === "progress" || d.type === "snapshot") {
+      $("barFill").style.width = (d.progress * 100) + "%";
+      $("status").innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><span>${d.message || "处理中…"}</span>`;
+      const idx = STAGES.findIndex(s => d.message && d.message.includes(s[1].split("(")[0]));
+      renderSteps(idx < 0 ? lastStage : idx, idx < 0 ? lastStage : idx);
+      if (idx >= 0) lastStage = idx;
+    } else if (d.type === "log") {
+      $("log").textContent += (d.line) + "\n";
+      $("log").scrollTop = $("log").scrollHeight;
+    } else if (d.type === "done") {
+      $("barFill").style.width = "100%";
+      $("status").innerHTML = `<span style="color:var(--ok)">✓ 全部完成！总耗时 ${d.elapsed_min} 分钟</span>`;
+      renderSteps(STAGES.length, STAGES.length);
+      $("go").disabled = false;
+      showResult(d, jobId);
+      loadHistory();
+      refreshQueue();
+    } else if (d.type === "failed") {
+      $("status").innerHTML = `<span style="color:var(--err)">✗ 失败: ${d.error}</span>`;
+      $("go").disabled = false;
+      $("paneTeacher").innerHTML = `<div class="empty-placeholder"><div class="empty-icon" style="color:var(--err)">❌</div><div class="empty-title">生成异常</div><div class="empty-desc" style="color:var(--err)">${d.error}</div></div>`;
+      refreshQueue();
+    } else if (d.type === "cancelled") {
+      $("status").textContent = d.message;
+      $("go").disabled = false;
+      refreshQueue();
+    }
+  };
+  es.onerror = () => { $("go").disabled = false; };
+}
+
+function startPolling() {
+  if (!pollTimer) pollTimer = setInterval(refreshQueue, 2500);
+}
+
+async function refreshQueue() {
+  if (!tracked.size) return;
+  const d = await (await fetch("/api/jobs")).json();
+  const items = d.items.filter(i => tracked.has(i.job_id));
+  if (!items.length) return;
+
+  if (items.some(i => i.status === "running" || i.status === "pending")) $("go").disabled = true;
+
+  $("queue").innerHTML = items.map(i => {
+    const pct = Math.round((i.progress || 0) * 100);
+    const cls = { running: "running", done: "done", failed: "failed", pending: "pending", cancelled: "" }[i.status] || "pending";
+    const name = { running: "处理中", done: "已完成", failed: "失败", pending: "排队中", cancelled: "已取消" }[i.status] || i.status;
+    const right = i.download
+      ? `<span class="act-btn primary" onclick="loadPreview('${i.job_id}', true)">查看结果</span>`
+      : (i.status === "pending" || i.status === "running"
+          ? `<span class="act-btn" onclick="cancelJob('${i.job_id}')">取消</span>` : "");
+    const meta = i.status === "done" ? `${i.verdict || "通过"} · 已完成` : (i.message || name);
+
+    return `<div class="queue-item">
+      <div style="flex:1;min-width:0">
+        <div class="queue-title" title="${i.url}">${i.title ? i.title : i.url}</div>
+        <div class="queue-meta"><span class="tag ${cls}">${name}</span><span>${meta}</span></div>
+        <div class="queue-bar"><i style="width:${pct}%"></i></div>
+      </div>
+      <div>${right}</div>
+    </div>`;
+  }).join("");
+
+  if (!items.some(i => i.status === "running" || i.status === "pending")) {
+    $("go").disabled = false;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+}
+
+async function cancelJob(id) {
+  await fetch(`/api/jobs/${id}/cancel`, { method: "POST" });
+  refreshQueue();
+}
+
+function showResult(d, jobId) {
+  currentJob = jobId;
+  $("stats").style.display = "grid";
+  $("downloadsBar").style.display = "flex";
+  $("openTabBtn").style.display = "block";
+
+  const s = d.stats || {};
+  const v = { pass: "✅ 审核通过", revise: "⚠ 已回炉修订", fail: "❌ 需重审" }[d.verdict] || d.verdict;
+
+  $("stats").innerHTML = [
+    ["核心知识点", (s.knowledge_count || 0) + " 个"],
+    ["精选典型例题", (s.example_count || 0) + " 道"],
+    ["题干精准确认", (s.verified_examples || 0) + "/" + (s.example_count || 0)],
+    ["质量审核", v],
+    ["回炉优化轮数", (s.review_rounds || 0) + " 轮"],
+    ["全流程耗时", (d.elapsed_min || 0) + " 分钟"]
+  ].map(([k, val]) => `<div class="stat-box"><div class="stat-label">${k}</div><div class="stat-val">${val}</div></div>`).join("");
+
+  $("dl").href = d.docx;
+  $("dls").href = d.docx_student || d.docx;
+  $("dljson").href = `/api/jobs/${jobId}/json`;
+
+  $("openTabLink").href = d.preview;
+
+  $("paneTeacher").innerHTML = `<iframe id="frameTeacher" src="${d.preview}"></iframe>`;
+  $("paneStudent").innerHTML = `<iframe id="frameStudent" src="${d.preview_student || d.preview}"></iframe>`;
+}
+
+function loadPreview(jobId, scrollUp) {
+  currentJob = jobId;
+  listen(jobId);
+  fetch(`/api/jobs/${jobId}`).then(r => r.json()).then(data => {
+    if (data.status === "done" && data.result) {
+      showResult({
+        docx: `/api/jobs/${jobId}/download/docx`,
+        docx_student: `/api/jobs/${jobId}/download/docx?audience=student`,
+        preview: `/api/jobs/${jobId}/preview`,
+        preview_student: `/api/jobs/${jobId}/preview?audience=student`,
+        stats: data.result.stats,
+        verdict: data.result.verdict,
+        elapsed_min: data.result.elapsed_min,
+      }, jobId);
+      if (scrollUp) window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  });
+}
+
+// History loading & direct preview
+function loadHistoryPreview(item) {
+  $("stats").style.display = "grid";
+  $("downloadsBar").style.display = "flex";
+  $("openTabBtn").style.display = "block";
+
+  const s = item.stats || {};
+  const v = { pass: "✅ 审核通过", revise: "⚠ 已修订", fail: "❌ 需重审" }[item.verdict] || item.verdict || "通过";
+
+  $("stats").innerHTML = [
+    ["核心知识点", (s.knowledge_count || 0) + " 个"],
+    ["精选典型例题", (s.example_count || 0) + " 道"],
+    ["审核结论", v],
+    ["生成时间", (item.generated_at || "").slice(0, 16)]
+  ].map(([k, val]) => `<div class="stat-box"><div class="stat-label">${k}</div><div class="stat-val">${val}</div></div>`).join("");
+
+  $("dl").href = item.docx;
+  $("dls").href = item.docx_student || item.docx;
+  $("dljson").href = "#";
+
+  $("openTabLink").href = item.preview;
+
+  $("paneTeacher").innerHTML = item.preview ? `<iframe src="${item.preview}"></iframe>` : '<div class="empty-placeholder">暂无预览</div>';
+  $("paneStudent").innerHTML = item.preview_student ? `<iframe src="${item.preview_student}"></iframe>` : '<div class="empty-placeholder">暂无预览</div>';
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+document.querySelectorAll(".tab-btn").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab-btn").forEach(x => x.classList.remove("on"));
+  t.classList.add("on");
+  const which = t.dataset.t;
+  $("paneTeacher").style.display = which === "teacher" ? "block" : "none";
+  $("paneStudent").style.display = which === "student" ? "block" : "none";
+  $("paneAbout").style.display = which === "about" ? "block" : "none";
+
+  if (which === "teacher") {
+    $("openTabLink").href = $("dl").href.replace("/download/docx", "/preview");
+  } else if (which === "student") {
+    $("openTabLink").href = $("dls").href.replace("/download/docx", "/preview");
+  }
+});
+
+function loadHistory() {
+  fetch("/api/history").then(r => r.json()).then(d => {
+    if (!d.items || !d.items.length) {
+      $("history").innerHTML = '<div class="empty-desc" style="padding: 12px 0;">还没有历史教案记录。</div>';
+      return;
+    }
+    $("history").innerHTML = d.items.map((it, idx) => {
+      const jsonStr = encodeURIComponent(JSON.stringify(it));
+      return `
+      <div class="hist-item">
+        <div class="hist-main">
+          <div class="hist-title" title="${it.title || '未命名'}">${it.title || "未命名"}</div>
+          <div class="hist-info">
+            <span>${(it.generated_at || "").slice(5, 16)}</span>
+            <span>·</span>
+            <span>${it.stats?.example_count || 0} 道典型例题</span>
+          </div>
+        </div>
+        <div class="hist-actions">
+          <button class="act-btn primary" onclick="loadHistoryItem('${jsonStr}')">预览</button>
+          <a class="act-btn" href="${it.docx}" title="下载教师版 Word">教师版</a>
+          ${it.docx_student ? `<a class="act-btn" href="${it.docx_student}" title="下载学生版 Word">学生版</a>` : ""}
+        </div>
+      </div>`;
+    }).join("");
+  });
+}
+
+window.loadHistoryItem = function(encoded) {
+  try {
+    const item = JSON.parse(decodeURIComponent(encoded));
+    loadHistoryPreview(item);
+  } catch(e) {
+    console.error(e);
+  }
+};
+
+loadHistory();
+</script>
+</body>
+</html>

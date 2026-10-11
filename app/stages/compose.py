@@ -150,7 +150,7 @@ def compose(
                 transcript=_transcript_slice(cues, group),
             )
             try:
-                return sub.chat_object(
+                part = sub.chat_object(
                     [{"role": "system", "content": COMPOSE_EXAMPLES_SYSTEM},
                      {"role": "user", "content": ex_msg}],
                     temperature=0.3,
@@ -158,6 +158,13 @@ def compose(
                 )
             except Exception:  # noqa: BLE001
                 return None
+            # 拿到结果就立刻并进 ex_map。必须在这里做，不能等 run_batches
+            # 返回后再统一 harvest——中途存档是批次**运行期间**触发的，
+            # 那时 ex_map 还空着，落盘的就是一份没有例题的骨架；下次重跑
+            # _load_draft 的两道闸都拦不住它（骨架不算 degenerate、
+            # 学科年级时长又都一致），会被当成合法草稿直接复用。
+            _harvest(part)
+            return part
 
         ex_lock = threading.Lock()
 

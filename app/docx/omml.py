@@ -23,28 +23,50 @@ class LatexError(ValueError):
     pass
 
 
+def clean_latex(latex: str) -> str:
+    """彻底剥离任何外层包装（$$, $, \\[, \\], \\(, \\) 等）并清理空白。"""
+    if not latex:
+        return ""
+    s = latex.strip()
+    # 去掉 markdown 代码块
+    s = re.sub(r"^```(?:latex|tex|math)?\s*", "", s)
+    s = re.sub(r"\s*```$", "", s).strip()
+    # 循环去除外层定界符，直到不再变化
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(r"^\$+|\$+$", "", s).strip()
+        s = re.sub(r"^\\\[|\\\]$", "", s).strip()
+        s = re.sub(r"^\\\(|\\\)$", "", s).strip()
+    return s
+
+
 def split_lines(latex: str) -> list[str]:
     """把多行公式（align / cases / 用 \\\\ 分行）拆成一行一个独立公式。
 
     Word 里没有"对齐符 &"的概念，拆成多段居中公式比硬塞一个 eqArr 更稳、更好看。
     """
-    s = latex.strip()
-    s = re.sub(r"^\\\[|\\\]$", "", s).strip()
-    s = re.sub(r"^\\\(|\\\)$", "", s).strip()
+    s = clean_latex(latex)
     for env in _STRIP_ENVS:
         s = re.sub(rf"\\begin\{{{env}\*?\}}(.*?)\\end\{{{env}\*?\}}", r"\1", s, flags=re.S)
     # cases / aligned 之类保留了缩进含义的环境，也按行拆
     for env in ("cases", "aligned", "gathered", "array", "matrix", "pmatrix", "bmatrix"):
         s = re.sub(rf"\\begin\{{{env}\}}(.*?)\\end\{{{env}\}}", r"\1", s, flags=re.S)
     parts = [ln.strip() for ln in re.split(r"\\\\", s) if ln.strip()]
-    # 去掉 align 的 & 对齐符
-    return [re.sub(r"(?<!\\)&", "", p).strip() for p in parts if p.strip("& \t")]
+    # 去掉 align 的 & 对齐符，并确保每一行都被 clean_latex 彻底剥离可能残留的外层 $
+    cleaned = []
+    for p in parts:
+        core = re.sub(r"(?<!\\)&", "", p).strip("& \t")
+        core = clean_latex(core)
+        if core:
+            cleaned.append(core)
+    return cleaned
 
 
 def _strip_wrapper(latex: str) -> str:
-    """取单行公式本体：拆环境、去 &、取第一行。"""
+    """取单行公式本体：彻底剥包装、拆环境、去 &、取第一行。"""
     lines = split_lines(latex)
-    return lines[0] if lines else ""
+    return clean_latex(lines[0]) if lines else ""
 
 
 @lru_cache(maxsize=1)
@@ -131,7 +153,7 @@ def has_omml_support() -> bool:
 
 # ------------------------------------------------------------------ 公式切分
 _MATH_PATTERNS = [
-    re.compile(r"\$\$(.+?)\$\$", re.S),
+    re.compile(r"\${2,}(.+?)\${2,}", re.S),
     re.compile(r"\\\[(.+?)\\\]", re.S),
     re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)", re.S),
     re.compile(r"\\\((.+?)\\\)", re.S),
@@ -144,6 +166,7 @@ def split_math(text: str) -> list[tuple[str, str, str]]:
     """把一段混排文本切成 [(类型, 内容, 原文)]，类型 ∈ {text, inline, block}。
 
     例：'已知 $f(x)=x^2$，求 $f(2)$' → [('text','已知 '), ('inline','f(x)=x^2'), ('text','，求 '), ...]
+    内容必须保证是经过 clean_latex 彻底剥离定界符后的纯净 LaTeX。
     """
     out: list[tuple[str, str, str]] = []
     i = 0
@@ -157,12 +180,12 @@ def split_math(text: str) -> list[tuple[str, str, str]]:
                 continue
             opener = m.group(0)
             kind = "block" if opener.startswith("$$") or opener.startswith("\\[") else "inline"
-            body = m.group(1).strip()
+            body = clean_latex(m.group(1))
             if body:
                 if buf:
                     out.append(("text", "".join(buf), "".join(buf)))
                     buf = []
-                out.append((kind, body, opener + m.group(1) + opener[-1]))
+                out.append((kind, body, opener))
                 i = m.end()
                 matched = True
                 break

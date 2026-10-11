@@ -48,8 +48,8 @@ def capture_examples(
                     f"截取 {kp.id}/{ex.id}「{ex.title}」画面（{_hms(ex.ts_start)}）",
                 )
             lo = max(0.0, ex.ts_start - SETTINGS.shot_pre_roll)
-            hi = min(duration, max(ex.ts_start + 8.0, ex.ts_end + SETTINGS.shot_post_roll))
-            hi = min(hi, duration)
+            # 候选帧聚焦在题目刚引入展示的窗口（切页至开讲初期），避免深挖入后段板书阶段
+            hi = min(duration, max(ex.ts_start + 12.0, min(ex.ts_start + 25.0, ex.ts_end + 5.0)))
             if hi - lo < 3:
                 hi = min(duration, lo + 3)
             try:

@@ -136,7 +136,7 @@ t_math, s_math = omml_text(teacher), omml_text(student)
 
 print()
 print("  ── 学生版该有的 ──")
-MUST_HAVE_S = ["一、本课知识点", "二、例题", "ex1．", "ex2．", "答案：", "充分对应 A ⊆ B"]
+MUST_HAVE_S = ["一、课堂同步精讲与针对演练", "三、参考答案与分步解析", "ex1．", "ex2．", "答案：", "充分对应 A ⊆ B"]
 for kw in MUST_HAVE_S:
     hit = kw in s_text
     print(f"    {'✅' if hit else '❌'} {kw}")
@@ -150,14 +150,14 @@ student_has = student_has and ans_math_ok
 print()
 print("  ── 学生版绝不该有的（只属于老师的）──")
 MUST_NOT_S = {
-    "讲法提示": "讲法提示",
+    "讲法提示": "【备课点拨与授课启发】",
     "易错/注意": "注意／易错",
     "审核记录": "审核记录",
     "教学目标": "教学目标",
     "课堂流程": "课堂流程",
     "字幕依据": "字幕依据",
     "视频位置时间戳": "视频位置",
-    "解析步骤": "【解析】",
+    "解析步骤": "【规范解法与分步剖析】",
     "板书字幕依据引号": "字幕依据",
     "只报答案的提示": "只报了答案",
 }
@@ -169,9 +169,12 @@ for name, kw in MUST_NOT_S.items():
 
 print()
 print("  ── 教师版该有的 ──")
-MUST_HAVE_T = ["一、本课知识点", "二、例题精讲", "讲法提示", "注意／易错",
-               "三、教学目标", "五、易错点汇总", "七、课堂流程与时间分配",
-               "八、课后作业", "附、审核记录", "【解析】", "字幕依据"]
+MUST_HAVE_T = ["一、教学目标", "二、教学重点与难点",
+               "三、核心知识精讲与针对典例剖析（讲练一体）",
+               "四、全课核心思想与易错点汇总", "五、教学准备与教具",
+               "六、课堂流程与时间分配建议", "七、课后作业与巩固练习",
+               "附、教案审核与备课说明",
+               "【规范解法与分步剖析】", "【备课点拨与授课启发】"]
 teacher_has = True
 for kw in MUST_HAVE_T:
     hit = kw in t_text
@@ -180,9 +183,12 @@ for kw in MUST_HAVE_T:
 
 print()
 print("  ── 只报答案的例题，两份的处理 ──")
-print(f"    {'✅' if '▸ 视频里老师只报了答案' in t_text else '❌'} 教师版如实说明「老师只报了答案」")
-print(f"    {'✅' if '【解析】' not in s_text else '❌'} 学生版没有硬塞解析")
-note_ok = "▸ 视频里老师只报了答案" in t_text and "【解析】" not in s_text
+# builder 现在对"没有可展示的分步解析"的例题写这句提示
+NO_SOLUTION_HINT = "视频中主要为教师口头点拨与引导分析"
+SOL_LABEL = "【规范解法与分步剖析】"
+print(f"    {'✅' if NO_SOLUTION_HINT in t_text else '❌'} 教师版如实说明该题视频里没展开推导")
+print(f"    {'✅' if SOL_LABEL not in s_text else '❌'} 学生版没有硬塞解析")
+note_ok = (NO_SOLUTION_HINT in t_text) and SOL_LABEL not in s_text
 
 print()
 print("  ── 脏东西检查 ──")

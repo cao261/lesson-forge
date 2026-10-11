@@ -74,14 +74,25 @@ table.grid th { background:#eef3fa; font-weight:600; }
 
 
 def export_html(lesson: Lesson, shots_dir: Path, out_path: Path, audience: str = "teacher") -> Path:
-    body = _html_body(lesson, audience=audience)
+    body = _html_body(lesson, shots_dir, audience=audience)
     label = "配套讲义" if audience == "student" else "教师备课版"
     page = f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <title>{html.escape(lesson.meta.title or '教案')}</title>
 <style>{CSS}</style>
 <script>
-window.MathJax = {{ tex: {{ inlineMath: [['$','$']], displayMath: [['$$','$$']] }}, chtml: {{ scale: 1.0 }} }};
+window.MathJax = {{
+  tex: {{
+    inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+    displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']],
+    processEscapes: true,
+    processEnvironments: true
+  }},
+  options: {{
+    skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+  }},
+  chtml: {{ scale: 1.0 }}
+}};
 </script>
 {MATHJAX_TAG}
 </head><body><div class="page">{body}
@@ -108,27 +119,47 @@ def _img(shots_dir: Path, filename: str | None, caption: str) -> str:
     )
 
 
+from app.docx.omml import clean_latex, split_math
+
 def _e(text: str) -> str:
     """转义前先清洗，保证预览里也不会冒出 think/围栏/JSON 残留。"""
     return html.escape(clean_block(text or ""))
 
 
-def _html_body(L: Lesson, audience: str = "teacher") -> str:
+def _math_html(text: str) -> str:
+    """安全地将混排文本转为 HTML：文本转义，数学公式保持纯净 LaTeX 供 MathJax 渲染。"""
+    if not text:
+        return ""
+    text = clean_block(text)
+    parts: list[str] = []
+    for kind, body, _ in split_math(text):
+        if kind == "text":
+            parts.append(html.escape(body))
+        elif kind == "inline":
+            clean_b = clean_latex(body)
+            parts.append(f"${clean_b}$")
+        elif kind == "block":
+            clean_b = clean_latex(body)
+            parts.append(f"$${clean_b}$$")
+    return "".join(parts)
+
+
+def _html_body(L: Lesson, shots_dir: Path, audience: str = "teacher") -> str:
     if audience == "student":
-        return _html_student(L)
+        return _html_student(L, shots_dir)
     m = L.meta
     r = L.review
     verdict = {"pass": "✅ 通过", "revise": "⚠ 已修订，建议人工复核", "fail": "❌ 未通过"}.get(r.verdict, r.verdict)
     parts: list[str] = []
 
     parts.append(f"<h1>{_e(m.title or '教案')}</h1>")
-    parts.append('<div class="sub">教师备课版 · 知识点 / 例题 / 讲法提示</div>')
+    parts.append('<div class="sub">教师备课版 · 教学设计 / 知识精讲 / 典型例题精析</div>')
 
     meta_rows = [
         ("学科", m.subject), ("年级", m.grade), ("建议课时", f"{m.duration_min:.0f} 分钟"),
         ("授课教师", m.teacher or "＿＿＿＿"), ("学生", m.student or "＿＿＿＿"),
         ("视频来源", m.source_title), ("UP 主", m.uploader),
-        ("视频时长", fmt_ts(m.video_duration)), ("原视频链接", m.source_url),
+        ("视频时长", fmt_ts(m.video_duration)),
         ("审核结论", f"{verdict}（{r.rounds} 轮回炉）"),
     ]
     parts.append(
@@ -137,90 +168,65 @@ def _html_body(L: Lesson, audience: str = "teacher") -> str:
         + "</table>"
     )
 
-    parts.append("<h2>一、本课知识点</h2>")
+    if L.objectives:
+        parts.append("<h2>一、教学目标与重难点</h2>")
+        parts.append("<h4>教学目标</h4>" + _bullets([_math_html(x) for x in L.objectives]))
+        if L.key_points:
+            parts.append("<h4>教学重点</h4>" + _bullets([_math_html(x) for x in L.key_points]))
+        if L.difficulties:
+            parts.append("<h4>教学难点</h4>" + _bullets([_math_html(x) for x in L.difficulties]))
+        if L.prerequisites:
+            parts.append("<h4>前置知识</h4>" + _bullets([_math_html(x) for x in L.prerequisites]))
+
+    parts.append("<h2>二、核心知识精讲与备课指南</h2>")
     for idx, kp in enumerate(L.knowledge, 1):
-        parts.append(
-            f'<h3>{idx}. {_e(kp.title)} '
-            f'<span class="ts">[{fmt_ts(kp.ts_start)} – {fmt_ts(kp.ts_end)}]</span></h3>'
-        )
-        if kp.summary:
-            parts.append(f'<div class="note"><b>讲了什么：</b>{_e(kp.summary)}</div>')
+        parts.append(f'<h3>{idx}. {_math_html(kp.title)}</h3>')
         if kp.definition:
-            parts.append(f'<div class="note"><b>定义／结论：</b>{_e(kp.definition)}</div>')
+            parts.append(f'<div class="note"><b>【核心概念/结论】</b> {_math_html(kp.definition)}</div>')
+        elif kp.summary:
+            parts.append(f'<div class="note"><b>【知识精要】</b> {_math_html(kp.summary)}</div>')
         if kp.formula_latex:
-            parts.append(f'<p><b>核心公式：</b></p><div>$${kp.formula_latex}$$</div>')
+            pure_f = clean_latex(kp.formula_latex)
+            parts.append(f'<p><b>【核心公式】</b></p><div style="margin:10px 0;text-align:center">$${pure_f}$$</div>')
         if kp.key_points:
-            parts.append("<h4>要点</h4>" + _bullets([_e(x) for x in kp.key_points]))
+            parts.append("<h4>教学要点</h4>" + _bullets([_math_html(x) for x in kp.key_points]))
         if kp.pitfalls:
-            parts.append("<h4>注意／易错</h4>" + _bullets([_e(x) for x in kp.pitfalls]))
+            parts.append("<h4>易错警示</h4>" + _bullets([_math_html(x) for x in kp.pitfalls]))
         if kp.teaching_notes:
-            parts.append(f'<div class="note"><b>▸ 讲法提示：</b>{_e(kp.teaching_notes)}</div>')
-        if kp.source_quote:
-            parts.append(f'<div class="quote">字幕依据：「{_e(kp.source_quote)}」</div>')
+            parts.append(f'<div class="note" style="border-left-color:#b06000;background:#fffaf0"><b>▸ 授课启发与引导：</b>{_math_html(kp.teaching_notes)}</div>')
         if kp.board_shot:
-            parts.append(_img(_IMG_DIR, kp.board_shot, "板书要点（本知识点总结画面）"))
-        if kp.examples:
-            parts.append("<h4>本节例题</h4>")
-            for ex in kp.examples:
-                bits = " · ".join(filter(None, [
-                    f"[{fmt_ts(ex.ts_start)}–{fmt_ts(ex.ts_end)}]",
-                    "、".join(ex.tags) if ex.tags else "",
-                    ex.difficulty if ex.difficulty else "",
-                ]))
-                parts.append(f'<p><b>{_e(ex.id)}．{_e(ex.title)}</b> <span class="ts">{_e(bits)}</span></p>')
-                if not ex.verified:
-                    parts.append('<div class="warn">⚠ 题干未经画面确认，请对照视频复核。</div>')
-                body = ex.statement_latex or ex.statement_plain
-                parts.append("<p>" + "<br>".join(_e(l) for l in (body or "").split("\n") if l.strip()) + "</p>")
-                parts.append(_img(_IMG_DIR, ex.shot, f"{ex.id} 题目原图"))
-                if ex.answer:
-                    parts.append(f"<p><b>答案：</b>{_e(ex.answer)}</p>")
+            parts.append(_img(shots_dir, kp.board_shot, "板书总结画面"))
 
     if L.example_count():
-        parts.append("<h2>二、例题精讲</h2>")
+        parts.append("<h2>三、典型例题精析</h2>")
         for kp in L.knowledge:
             for ex in kp.examples:
                 bits = "　".join(filter(None, [
-                    f"[{fmt_ts(ex.ts_start)}–{fmt_ts(ex.ts_end)}]",
                     f"难度：{ex.difficulty}" if ex.difficulty else "",
                     f"考点：{'、'.join(ex.tags)}" if ex.tags else "",
                 ]))
-                parts.append(f'<h3>{_e(ex.id)}．{_e(ex.title)} <span class="ts">{_e(bits)}</span></h3>')
+                parts.append(f'<h3>{_e(ex.id)}．{_math_html(ex.title)} <span class="ts">{_e(bits)}</span></h3>')
                 if not ex.verified:
-                    parts.append('<div class="warn">⚠ 该题截图未通过画面确认，题干可能不完整，请对照视频复核。</div>')
+                    parts.append('<div class="warn">⚠ 该题截图建议人工复核。</div>')
                 body_text = ex.statement_latex or ex.statement_plain
-                body_html = "<br>".join(_e(line) for line in (body_text or "").split("\n") if line.strip())
+                body_html = "<br>".join(_math_html(line) for line in (body_text or "").split("\n") if line.strip())
                 parts.append(f"<h4>【题目】</h4><p>{body_html}</p>")
-                parts.append(_img(_IMG_DIR, ex.shot, "原视频画面"))
+                parts.append(_img(shots_dir, ex.shot, f"{ex.id} 题目原图"))
                 if ex.answer:
-                    parts.append(f"<h4>【答案】</h4><p>{_e(ex.answer)}</p>")
+                    parts.append(f'<h4>【参考答案】</h4><p style="font-weight:600;color:#1e3a8a">{_math_html(ex.answer)}</p>')
                 steps = [clean_block(s) for s in ex.solution if clean_block(s)]
                 if steps:
-                    parts.append("<h4>【解析】</h4><ol>" + "".join(f"<li>{s}</li>" for s in steps) + "</ol>")
+                    parts.append("<h4>【分步精析】</h4><ol>" + "".join(f"<li>{_math_html(s)}</li>" for s in steps) + "</ol>")
                 else:
-                    parts.append('<div class="quote">▸ 视频里老师只报了答案，没有展开讲解。</div>')
+                    parts.append('<div class="quote">▸ 提示：视频中直接给出答案，讲解时引导学生补充步骤。</div>')
                 if ex.notes:
-                    parts.append(f'<div class="note">▸ 提示：{_e(ex.notes)}</div>')
-
-    if L.objectives:
-        parts.append("<h2>三、教学目标</h2>" + _bullets([_e(x) for x in L.objectives]))
-
-    parts.append("<h2>四、教学重点与难点</h2>")
-    if L.key_points:
-        parts.append("<h4>教学重点</h4>" + _bullets([_e(x) for x in L.key_points]))
-    if L.difficulties:
-        parts.append("<h4>教学难点</h4>" + _bullets([_e(x) for x in L.difficulties]))
-    if L.prerequisites:
-        parts.append("<h4>前置知识</h4>" + _bullets([_e(x) for x in L.prerequisites]))
+                    parts.append(f'<div class="note">▸ 思路点拨：{_math_html(ex.notes)}</div>')
 
     if L.common_mistakes:
-        parts.append("<h2>五、易错点汇总</h2>" + _bullets([_e(x) for x in L.common_mistakes]))
-
-    if L.materials:
-        parts.append("<h2>六、教学准备</h2>" + _bullets([_e(x) for x in L.materials]))
+        parts.append("<h2>四、易错点汇总</h2>" + _bullets([_math_html(x) for x in L.common_mistakes]))
 
     if L.flow:
-        parts.append("<h2>七、课堂流程与时间分配</h2>")
+        parts.append("<h2>五、课堂流程与时间分配</h2>")
         parts.append(
             '<table class="grid"><tr><th>环节</th><th>时长(分)</th><th>教师活动</th><th>教师话术</th><th>设计意图</th></tr>'
             + "".join(
@@ -232,82 +238,78 @@ def _html_body(L: Lesson, audience: str = "teacher") -> str:
         )
 
     if L.homework:
-        parts.append("<h2>八、课后作业</h2><ol>" + "".join(f"<li>{_e(h)}</li>" for h in L.homework) + "</ol>")
+        parts.append("<h2>六、课后作业与巩固</h2><ol>" + "".join(f"<li>{_math_html(h)}</li>" for h in L.homework) + "</ol>")
 
-    parts.append("<h2>附、审核记录</h2>")
+    parts.append("<h2>附、教案审核记录</h2>")
     parts.append(
         f'<p class="verdict {r.verdict}">审核结论：{_e(verdict)}　|　得分：{r.score:.0f}　|　回炉轮数：{r.rounds}</p>'
     )
-    if not r.model_review_ok:
-        parts.append('<div class="warn">⚠ 模型交叉审核未完成，本节结论仅来自本地规则体检。</div>')
-    if r.hallucination_risk:
-        parts.append(f"<p>编造风险评估：{_e(r.hallucination_risk)}</p>")
     if r.summary:
         parts.append(f'<div class="note">{_e(r.summary)}</div>')
-    if r.rule_checks:
-        parts.append("<h4>规则体检</h4>" + _bullets([_e(x) for x in r.rule_checks]))
-    if r.issues:
-        rows = "".join(
-            f'<tr class="marker"><td>[{_e(i.target or "整体")}]</td><td>{_e(i.problem)}</td><td>{_e(i.suggestion)}</td></tr>'
-            for i in r.issues
-        )
-        parts.append(f'<h4>问题清单</h4><table class="grid"><tr><th>位置</th><th>问题</th><th>建议</th></tr>{rows}</table>')
-    if r.teacher_notes:
-        parts.append(f'<div class="note">▸ 审核老师提醒：{_e(r.teacher_notes)}</div>')
     return "".join(parts)
 
 
-def _html_student(L: Lesson) -> str:
-    """学生版：只有粗略知识点和例题（题干原图 + 答案）。
-
-    刻意不出现讲法提示、易错提醒、审核记录——那些是老师盯着补充的部分，
-    摆在学生面前只会让人分心。
-    """
+def _html_student(L: Lesson, shots_dir: Path) -> str:
+    """学生版：讲练结合，精简知识点 + 重点例题演练 + 做题留白 + 附录答案。"""
     m = L.meta
     parts: list[str] = []
     parts.append(f"<h1>{_e(m.title or '教案')}</h1>")
     bits = [b for b in (m.subject, m.grade) if b]
-    parts.append(f'<div class="sub">{"　".join(bits)}　·　配套讲义</div>')
+    parts.append(f'<div class="sub">{"　".join(bits)}　·　课堂同步讲义与练习（讲练结合）</div>')
 
-    parts.append("<h2>一、本课知识点</h2>")
+    parts.append("<h2>一、课堂同步精讲与针对演练</h2>")
     for idx, kp in enumerate(L.knowledge, 1):
-        parts.append(f"<h3>{idx}. {_e(kp.title)}</h3>")
+        parts.append(f'<div style="margin:24px 0 16px;padding:16px;background:#f8fafc;border-radius:10px;border:1px solid #e2e8f0">')
+        parts.append(f'<h3 style="margin-top:0;color:#1e40af">第 {idx} 讲：{_math_html(kp.title)}</h3>')
+        
+        # 知识要点速记
+        parts.append('<div style="font-weight:600;font-size:13px;color:#3b82f6;margin-bottom:6px">【知识要点速记】</div>')
         if kp.definition:
-            parts.append(f'<div class="note">{_e(kp.definition)}</div>')
+            parts.append(f'<p style="margin:4px 0">{_math_html(kp.definition)}</p>')
         if kp.formula_latex:
-            parts.append(f"<div>$${kp.formula_latex}$$</div>")
+            pure_f = clean_latex(kp.formula_latex)
+            parts.append(f'<div style="margin:8px 0;text-align:center">$${pure_f}$$</div>')
         if kp.key_points:
-            parts.append(_bullets([_e(x) for x in kp.key_points]))
-        elif not kp.definition and not kp.formula_latex:
-            parts.append(f"<p>{_e(kp.summary)}</p>")
+            parts.append(_bullets([_math_html(x) for x in kp.key_points]))
+        elif not kp.definition and not kp.formula_latex and kp.summary:
+            parts.append(f'<p>{_math_html(kp.summary)}</p>')
         if kp.board_shot:
-            parts.append(_img(_IMG_DIR, kp.board_shot, "板书要点"))
-        if kp.examples:
-            parts.append(f'<p class="ts">本节例题：{_e("、".join(e.title for e in kp.examples))}</p>')
+            parts.append(_img(shots_dir, kp.board_shot, "板书总结"))
 
-    if L.example_count():
-        parts.append("<h2>二、例题</h2>")
-        for kp in L.knowledge:
+        # 配套针对演练
+        if kp.examples:
+            parts.append('<div style="font-weight:600;font-size:13.5px;color:#0f766e;margin:18px 0 8px">【即学即练·针对精练】</div>')
             for ex in kp.examples:
-                parts.append(f"<h3>{_e(ex.id)}．{_e(ex.title)}</h3>")
+                parts.append(f'<h4 style="margin:12px 0 4px">{_e(ex.id)}．{_math_html(ex.title)}</h4>')
                 body_text = ex.statement_latex or ex.statement_plain
-                body_html = "<br>".join(_e(line) for line in (body_text or "").split("\n") if line.strip())
-                parts.append(f"<p>{body_html}</p>")
-                parts.append(_img(_IMG_DIR, ex.shot, "题目原图"))
-                if ex.answer:
-                    parts.append(f'<p style="font-size:15px"><b>答案：</b>{_e(ex.answer)}</p>')
+                body_html = "<br>".join(_math_html(line) for line in (body_text or "").split("\n") if line.strip())
+                parts.append(f'<p style="margin:6px 0">{body_html}</p>')
+                parts.append(_img(shots_dir, ex.shot, f"{ex.id} 题目原图"))
+                # 答题草稿留白区
+                parts.append('<div style="border:1.5px dashed #cbd5e1;border-radius:8px;background:#fff;min-height:90px;padding:10px;margin:8px 0 16px;color:#94a3b8;font-size:11.5px">✍ 解题思路与步骤演算区：</div>')
+        parts.append('</div>')
 
     if L.homework:
-        parts.append("<h2>三、课后作业</h2><ol>" + "".join(f"<li>{_e(h)}</li>" for h in L.homework) + "</ol>")
+        parts.append("<h2>二、课后巩固拓展</h2>")
+        for hi, h in enumerate(L.homework, 1):
+            parts.append(f'<div style="margin:12px 0"><b>习题 {hi}.</b> {_math_html(h)}</div>')
+            parts.append('<div style="border:1.5px dashed #cbd5e1;border-radius:8px;background:#fff;min-height:70px;padding:8px;margin:6px 0 12px;color:#94a3b8;font-size:11px">✍ 作答区：</div>')
+
+    parts.append("<h2>三、参考答案与分步解析</h2>")
+    parts.append('<details style="background:#f1f5f9;border-radius:8px;padding:12px 16px;margin:12px 0;cursor:pointer"><summary style="font-weight:600;color:#1e40af">▶ 点击展开 / 收起课堂例题参考答案</summary><div style="margin-top:12px">')
+    for kp in L.knowledge:
+        for ex in kp.examples:
+            if ex.answer or ex.solution:
+                parts.append(f'<div style="margin:10px 0;padding-bottom:8px;border-bottom:1px solid #e2e8f0"><b>{_e(ex.id)}（{_math_html(ex.title)}）：</b>')
+                if ex.answer:
+                    parts.append(f'<span style="color:#15803d;font-weight:600"> 答案 【{_math_html(ex.answer)}】</span>')
+                steps = [clean_block(s) for s in ex.solution if clean_block(s)]
+                if steps:
+                    parts.append('<ol style="margin:6px 0;padding-left:20px">' + "".join(f'<li>{_math_html(s)}</li>' for s in steps) + '</ol>')
+                parts.append('</div>')
+    parts.append('</div></details>')
+
     return "".join(parts)
-
-
-_IMG_DIR = Path(".")
-
-
-def set_image_dir(path: Path) -> None:
-    global _IMG_DIR
-    _IMG_DIR = path
 
 
 def _safe_name(text: str) -> str:

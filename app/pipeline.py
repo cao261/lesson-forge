@@ -17,7 +17,7 @@ from typing import Callable
 from app.config import SETTINGS
 from app.llm.client import set_notice_hook
 from app.media import ffmpeg
-from app.models import Lesson, LessonMeta
+from app.models import Cue, Lesson, LessonMeta
 from app import textnorm
 from app.stages import asr, compose, export, fetch, normalize, review as review_stage, segment, shots, vision
 
@@ -175,7 +175,11 @@ def run_pipeline(
         if on_log:
             on_log(message)
 
-    # 模型降级/限速事件直接进日志，网页界面能实时看到
+    # 模型降级/限速事件直接进日志，网页界面能实时看到。
+    # 先清空再挂：钩子是进程级全局的，不清会把上一个任务的闭包（连同它
+    # 引用的 Job 和全部日志）一直钉在列表里——新任务的模型事件会写进
+    # 旧任务的日志和 SSE 队列，前端会当作本任务事件渲染出来。
+    set_notice_hook(None)
     set_notice_hook(log)
 
     log(f"工作目录：{work_dir}")
@@ -350,7 +354,6 @@ def run_pipeline(
 
     # ---------------------------------------------------------- 8. 导出
     rep = _Reporter("export", on_progress, log)
-    export.set_image_dir(shots_dir)
     teacher_docx, student_docx = export.export_docx_both(lesson, shots_dir, work_dir)
     rep(0.6, f"教师备课版已生成：{teacher_docx.name}")
     rep(0.7, f"学生讲义已生成：{student_docx.name}")

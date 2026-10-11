@@ -113,14 +113,40 @@ class DocxBuilder:
         if not filename:
             return
         path = self.shots_dir / filename
+        # 优先使用清晰/纯净裁剪版截图
+        for candidate_name in (
+            path.stem + "_clean.png",
+            path.stem + "_clean.jpg",
+            path.stem.split("_")[0] + "_clean.png",
+            path.stem.split("_")[0] + "_clean.jpg",
+        ):
+            candidate = self.shots_dir / candidate_name
+            if candidate.exists():
+                path = candidate
+                break
         if not path.exists():
             return
         try:
+            # 根据宽高比自适应排版宽度，既保证清晰大图，又避免纵向撑爆页面
+            target_width = max_width
+            try:
+                from PIL import Image
+                with Image.open(path) as im:
+                    aspect = im.size[0] / max(1, im.size[1])
+                    if aspect < 1.0:
+                        target_width = min(max_width, round(3.6 * aspect, 2))
+                    elif aspect < 1.35:
+                        target_width = min(max_width, 4.6)
+                    else:
+                        target_width = min(max_width, 5.4 if self.is_student else 5.2)
+            except Exception:  # noqa: BLE001
+                pass
+
             para = self.doc.add_paragraph()
             para.alignment = WD_ALIGN_PARAGRAPH.CENTER
             para.paragraph_format.space_before = Pt(4)
             para.paragraph_format.space_after = Pt(2)
-            para.add_run().add_picture(str(path), width=Inches(max_width))
+            para.add_run().add_picture(str(path), width=Inches(target_width))
         except Exception:  # noqa: BLE001
             return
         if caption:
@@ -169,14 +195,8 @@ class DocxBuilder:
             if not block:
                 para._p.append(parse_xml(omml))
                 return
-            # 独立公式：剥出 oMath 内部内容，包一层 oMathPara 让它在 Word 里居中
-            open_end = omml.find(">")
-            close_at = omml.rfind("</m:oMath>")
-            if open_end == -1 or close_at == -1:
-                para._p.append(parse_xml(omml))
-                return
-            inner = omml[open_end + 1 : close_at]
-            para._p.append(parse_xml(MATH_PARA_HEAD + inner + "</m:oMathPara>"))
+            # 独立公式：oMathPara 必须包裹完整的 oMath，符合 ECMA-376 规范且 Word 桌面端不报损坏
+            para._p.append(parse_xml(MATH_PARA_HEAD + omml + "</m:oMathPara>"))
         except Exception:  # noqa: BLE001
             # 万一 OMML 结构异常，至少别把整份文档搞挂
             run = para.add_run("〔公式转换异常〕")
@@ -223,27 +243,39 @@ class DocxBuilder:
 
         if self.is_student:
             self._student_head()
-            self._p("一、本课知识点", style="Heading 1")
-            self._knowledge_student()
-            if L.example_count():
-                self._p("二、例题", style="Heading 1")
-                self._examples_student()
+            self._p("一、课堂同步精讲与针对演练", style="Heading 1")
+            self._modules_student()
             if L.homework:
-                self._p("三、课后作业", style="Heading 1")
-                self._homework_items()
+                self._p("二、课后巩固拓展", style="Heading 1")
+                self._homework_student()
+            self._p("三、参考答案与分步解析", style="Heading 1")
+            self._answers_student()
         else:
             self._info_table()
-            self._p("一、本课知识点", style="Heading 1")
-            self._knowledge_teacher()
-            if L.example_count():
-                self._p("二、例题精讲", style="Heading 1")
-                self._examples_teacher()
-            self._objectives()
-            self._key_difficulties()
-            self._common_mistakes()
-            self._materials()
-            self._flow_table()
-            self._homework()
+            CN_NUMS = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
+            sec_idx = 0
+
+            if self.lesson.objectives:
+                self._objectives(CN_NUMS[sec_idx])
+                sec_idx += 1
+            if self.lesson.key_points or self.lesson.difficulties:
+                self._key_difficulties(CN_NUMS[sec_idx])
+                sec_idx += 1
+            self._p(f"{CN_NUMS[sec_idx]}、核心知识精讲与针对典例剖析（讲练一体）", style="Heading 1")
+            sec_idx += 1
+            self._modules_teacher()
+            if self.lesson.common_mistakes:
+                self._common_mistakes(CN_NUMS[sec_idx])
+                sec_idx += 1
+            if self.lesson.materials:
+                self._materials(CN_NUMS[sec_idx])
+                sec_idx += 1
+            if self.lesson.flow:
+                self._flow_table(CN_NUMS[sec_idx])
+                sec_idx += 1
+            if self.lesson.homework:
+                self._homework(CN_NUMS[sec_idx])
+                sec_idx += 1
             self._review()
             self._footer_note()
 
@@ -251,23 +283,70 @@ class DocxBuilder:
         self.doc.save(str(out_path))
         return out_path
 
-    # ------------------------------------------------------------------ 学生版
+    # ------------------------------------------------------------------ 学生版（讲练结合）
     def _student_head(self) -> None:
-        """学生版顶部一行小字，说清这份讲义是干什么用的。"""
+        """学生版顶部提示：讲练结合，以做题演练为主。"""
         meta = self.lesson.meta
         bits = [b for b in (meta.subject, meta.grade) if b]
         head = self._p(align=WD_ALIGN_PARAGRAPH.CENTER, size=10, color=RGBColor(0x55, 0x55, 0x55))
-        head.add_run("　".join(bits) + "　·　先自己看例题，不会的地方问老师")
-        head.paragraph_format.space_after = Pt(10)
+        head.add_run("　".join(bits) + "　·　课堂同步讲义与练习 · 先独立演练，课后核对答案")
+        head.paragraph_format.space_after = Pt(12)
 
-    def _knowledge_student(self) -> None:
-        """学生只看要点和公式：不需要讲法、不需要易错提醒、不需要时间戳。"""
+    def _add_practice_box(self, lines: int = 5) -> None:
+        """为学生版留出舒适的解题草稿与书写区域。"""
+        p = self._p("【解题与演练区】：", size=9.5, color=RGBColor(0x88, 0x88, 0x88), indent=0.2)
+        p.paragraph_format.space_before = Pt(4)
+        p.paragraph_format.space_after = Pt(2)
+        tbl = self.doc.add_table(rows=1, cols=1)
+        tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        cell = tbl.rows[0].cells[0]
+        cell.width = Inches(5.8)
+        # 留白高度
+        tc_p = cell.paragraphs[0]
+        tc_p.paragraph_format.space_before = Pt(lines * 8)
+        tc_p.paragraph_format.space_after = Pt(lines * 8)
+        run = tc_p.add_run("（请在虚线框内书写解题思路与计算步骤）")
+        run.font.size = Pt(8.5)
+        run.font.color.rgb = RGBColor(0xBB, 0xBB, 0xBB)
+        # 只铺底纹。不能走 _set_cell：它第一行就是 cell.text = ""，
+        # 会把上面刚加的提示文字和 lines*8 的留白高度一起清成 1pt，
+        # 学生讲义的书写区塌成一条发丝线，提示也没了。
+        tc_pr = cell._tc.get_or_add_tcPr()
+        tc_pr.append(parse_xml(
+            f'<w:shd xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            f'w:val="clear" w:color="auto" w:fill="FAFAFA"/>'
+        ))
+        self.doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    def _modules_student(self) -> None:
+        """学生版讲练结合：按知识点编排，每个知识点后紧跟对应练习题目。"""
+        current_ch = ""
+        kp_in_ch = 0
         for idx, kp in enumerate(self.lesson.knowledge, 1):
-            self._p(f"{idx}. {self._c(kp.title)}", style="Heading 2")
+            m = re.match(r"^【第(\d+)讲\s*[·・-]?\s*(.*?)】(.*)$", kp.title)
+            if m:
+                ch_num, raw_ch_name, kp_name = m.group(1), m.group(2).strip(), m.group(3).strip()
+                ch_name = re.sub(r"^(讲|直线[和与]圆[·・-]?)", "", raw_ch_name).strip()
+                if ch_num != current_ch:
+                    current_ch = ch_num
+                    kp_in_ch = 0
+                    ch_p = self._p(f"第 {ch_num} 讲 · {ch_name}", style="Heading 2")
+                    ch_p.paragraph_format.space_before = Pt(14)
+                    ch_p.paragraph_format.space_after = Pt(6)
+                kp_in_ch += 1
+                kp_heading = f"考点 {kp_in_ch} · {kp_name}"
+                head_style = "Heading 3"
+            else:
+                kp_heading = f"考点 {idx} · {self._c(kp.title)}"
+                head_style = "Heading 2"
 
+            self._p(kp_heading, style=head_style)
+
+            # 1. 精炼知识点速记（学生版只看核心结论）
+            self._p("【知识要点速记】", size=10, bold=True, color=RGBColor(0x2E, 0x5C, 0x8A), indent=0.1)
             definition = self._c(kp.definition)
             if definition:
-                self._p(definition, indent=0.15)
+                self._p(definition, indent=0.2)
 
             if kp.formula_latex:
                 math_para = self.doc.add_paragraph()
@@ -275,28 +354,69 @@ class DocxBuilder:
                 self._add_math(math_para, self._c(kp.formula_latex), block=True)
 
             for item in kp.key_points:
-                self._bullet(self._c(item))
+                self._bullet(self._c(item), level=0)
 
-            if not kp.key_points and not definition and not kp.formula_latex:
-                self._p(self._c(kp.summary), indent=0.15)
+            if not kp.key_points and not definition and not kp.formula_latex and kp.summary:
+                self._p(self._c(kp.summary), indent=0.2)
 
-            board = kp.board_shot if (kp.board_shot and self.shots_dir.joinpath(kp.board_shot).exists()) else None
-            self._image(board, "板书要点")
+            # 学生版讲义绝不放老师手写演算的板书截图，确保学生端毫无解题痕迹
+            # 2. 配套针对精练（不直接给答案，留出做题空间）
             if kp.examples:
-                self._p(f"本节例题：{'、'.join(ex.title for ex in kp.examples)}",
-                        size=9, color=RGBColor(0x88, 0x88, 0x88), indent=0.15)
+                self._p("【即学即练·针对精练】", size=10.5, bold=True, color=RGBColor(0x1F, 0x4E, 0x79), indent=0.1)
+                for ex in kp.examples:
+                    self._p(f"{ex.id}．{self._c(ex.title)}", size=11, bold=True, indent=0.15)
+                    for line in (self._c(ex.statement_latex or ex.statement_plain)).split("\n"):
+                        if line.strip():
+                            self._p(line.strip(), indent=0.2)
+                    self._image(ex.shot, f"{ex.id} 题目图", max_width=5.2)
+                    self._add_practice_box(lines=5)
 
-    def _examples_student(self) -> None:
-        """学生版例题：原图 + 答案。没有解析就不硬塞——老师只讲了答案就是只有答案。"""
+    def _homework_student(self) -> None:
+        """学生版课后作业。"""
+        for i, item in enumerate(self.lesson.homework, 1):
+            para = self.doc.add_paragraph()
+            para.paragraph_format.left_indent = Inches(0.2)
+            run = para.add_run(f"习题 {i}. ")
+            run.font.bold = True
+            run.font.name = LATIN_FONT
+            self.add_rich(para, self._c(item))
+            self._add_practice_box(lines=4)
+
+    def _answers_student(self) -> None:
+        """学生版参考答案（放在文末，课下对照）。"""
+        self._p("【课堂精练参考答案】", size=11, bold=True, color=RGBColor(0x1F, 0x4E, 0x79))
+        current_ch = ""
         for kp in self.lesson.knowledge:
+            m = re.match(r"^【第(\d+)讲\s*[·・-]?\s*(.*?)】(.*)$", kp.title)
+            if m and kp.examples:
+                ch_num, raw_ch_name = m.group(1), m.group(2).strip()
+                ch_name = re.sub(r"^(讲|直线[和与]圆[·・-]?)", "", raw_ch_name).strip()
+                if ch_num != current_ch:
+                    current_ch = ch_num
+                    ans_ch = self._p(f"第 {ch_num} 讲 · {ch_name}", size=11, bold=True, color=RGBColor(0x1F, 0x38, 0x64))
+                    ans_ch.paragraph_format.space_before = Pt(8)
+                    ans_ch.paragraph_format.space_after = Pt(2)
             for ex in kp.examples:
-                self._p(f"{ex.id}．{self._c(ex.title)}", style="Heading 2")
-                for line in (self._c(ex.statement_latex or ex.statement_plain)).split("\n"):
-                    if line.strip():
-                        self._p(line.strip(), indent=0.2)
-                self._image(ex.shot, "题目原图")
-                if ex.answer:
-                    self._p(f"答案：{self._c(ex.answer)}", size=11, bold=True, indent=0.2)
+                if ex.answer or ex.solution:
+                    ans_p = self.doc.add_paragraph()
+                    ans_p.paragraph_format.left_indent = Inches(0.2)
+                    ans_p.paragraph_format.space_after = Pt(2)
+                    run = ans_p.add_run(f"{ex.id}（{self._c(ex.title)}）：")
+                    run.font.bold = True
+                    if ex.answer:
+                        ans_label = ans_p.add_run("答案：")
+                        ans_label.font.bold = True
+                        self.add_rich(ans_p, self._c(ex.answer))
+                    steps = [self._c(s) for s in ex.solution if self._c(s)]
+                    if steps:
+                        for si, step in enumerate(steps, 1):
+                            sp = self.doc.add_paragraph()
+                            sp.paragraph_format.left_indent = Inches(0.4)
+                            sp.paragraph_format.space_after = Pt(1)
+                            r = sp.add_run(f"步骤 {si}：")
+                            r.font.size = Pt(9.5)
+                            self.add_rich(sp, step, size=9.5)
+
 
     def _info_table(self) -> None:
         L = self.lesson
@@ -329,15 +449,15 @@ class DocxBuilder:
             row.cells[1].width = Inches(2.5)
         self.doc.add_paragraph()
 
-    def _objectives(self) -> None:
+    def _objectives(self, num: str = "一") -> None:
         if not self.lesson.objectives:
             return
-        self._p("三、教学目标", style="Heading 1")
+        self._p(f"{num}、教学目标", style="Heading 1")
         for item in self.lesson.objectives:
             self._bullet(self._c(item))
 
-    def _key_difficulties(self) -> None:
-        self._p("四、教学重点与难点", style="Heading 1")
+    def _key_difficulties(self, num: str = "二") -> None:
+        self._p(f"{num}、教学重点与难点", style="Heading 1")
         if self.lesson.key_points:
             self._p("教学重点", size=10.5, bold=True)
             for item in self.lesson.key_points:
@@ -351,149 +471,178 @@ class DocxBuilder:
             for item in self.lesson.prerequisites:
                 self._bullet(self._c(item))
 
-    def _materials(self) -> None:
+    def _materials(self, num: str = "五") -> None:
         if not self.lesson.materials:
             return
-        self._p("六、教学准备", style="Heading 1")
+        self._p(f"{num}、教学准备与教具", style="Heading 1")
         for item in self.lesson.materials:
             self._bullet(self._c(item))
 
-    def _knowledge_teacher(self) -> None:
-        """教师版知识点：讲了什么、规范表述、公式、要点、易错、讲法提示、字幕依据。"""
+    def _modules_teacher(self) -> None:
+        """教师版讲练结合：按知识点编排，每个知识点后紧跟其对应的针对性例题剖析。"""
+        current_ch = ""
+        kp_in_ch = 0
         for idx, kp in enumerate(self.lesson.knowledge, 1):
-            self._p(f"{idx}. {self._c(kp.title)}", style="Heading 2")
-            meta_line = self._p(size=9, color=RGBColor(0x88, 0x88, 0x88))
-            meta_line.add_run(f"视频位置：{fmt_ts(kp.ts_start)} – {fmt_ts(kp.ts_end)}")
-            if kp.summary:
-                self._p(f"讲了什么：{self._c(kp.summary)}")
+            m = re.match(r"^【第(\d+)讲\s*[·・-]?\s*(.*?)】(.*)$", kp.title)
+            if m:
+                ch_num, raw_ch_name, kp_name = m.group(1), m.group(2).strip(), m.group(3).strip()
+                ch_name = re.sub(r"^(讲|直线[和与]圆[·・-]?)", "", raw_ch_name).strip()
+                if ch_num != current_ch:
+                    current_ch = ch_num
+                    kp_in_ch = 0
+                    ch_p = self._p(f"第 {ch_num} 讲 · {ch_name}", style="Heading 2")
+                    ch_p.paragraph_format.space_before = Pt(14)
+                    ch_p.paragraph_format.space_after = Pt(6)
+                kp_in_ch += 1
+                kp_heading = f"考点 {kp_in_ch} · {kp_name}"
+                head_style = "Heading 3"
+            else:
+                kp_heading = f"考点 {idx} · {self._c(kp.title)}"
+                head_style = "Heading 2"
+
+            self._p(kp_heading, style=head_style)
+
+            # 1. 核心概念与结论
             if kp.definition:
-                self._p(f"定义／结论：{self._c(kp.definition)}", indent=0.15)
+                p = self._p(indent=0.15)
+                r = p.add_run("【核心概念与定理】 ")
+                r.bold = True
+                r.font.color.rgb = RGBColor(0x1F, 0x4E, 0x79)
+                self.add_rich(p, self._c(kp.definition))
+            if kp.summary and kp.summary != kp.definition:
+                p = self._p(indent=0.15)
+                r = p.add_run("【内容精要与内涵阐释】 ")
+                r.bold = True
+                r.font.color.rgb = RGBColor(0x2E, 0x5C, 0x8A)
+                self.add_rich(p, self._c(kp.summary))
+
+            # 2. 核心公式
             if kp.formula_latex:
-                self._p("核心公式：", size=10.5, bold=True, indent=0.15)
+                p = self._p("【核心公式与推导结论】", size=10.5, bold=True, color=RGBColor(0x1F, 0x4E, 0x79), indent=0.15)
+                p.paragraph_format.space_before = Pt(3)
+                p.paragraph_format.space_after = Pt(2)
                 math_para = self.doc.add_paragraph()
                 math_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 self._add_math(math_para, self._c(kp.formula_latex), block=True)
+
+            # 3. 教学要点
             if kp.key_points:
-                self._p("要点：", size=10.5, bold=True, indent=0.15)
+                p = self._p("【教学重点与考向梳理】", size=10.5, bold=True, color=RGBColor(0x1F, 0x4E, 0x79), indent=0.15)
+                p.paragraph_format.space_before = Pt(3)
+                p.paragraph_format.space_after = Pt(2)
                 for item in kp.key_points:
                     self._bullet(self._c(item))
+
+            # 4. 易错警示
             if kp.pitfalls:
-                self._p("注意／易错：", size=10.5, bold=True, indent=0.15)
+                p = self._p("【易错警示与避坑指南】", size=10.5, bold=True, color=RGBColor(0xC0, 0x39, 0x2B), indent=0.15)
+                p.paragraph_format.space_before = Pt(3)
+                p.paragraph_format.space_after = Pt(2)
                 for item in kp.pitfalls:
                     self._bullet(self._c(item))
+
+            # 5. 备课与讲法点拨
             if kp.teaching_notes:
+                p = self._p("【备课点拨与授课启发】", size=10, bold=True, color=RGBColor(0xB0, 0x60, 0x00), indent=0.15)
+                p.paragraph_format.space_before = Pt(3)
+                p.paragraph_format.space_after = Pt(2)
                 note = self._p(size=10.5, indent=0.15)
-                head = note.add_run("▸ 讲法提示：")
+                head = note.add_run("▸ 授课启发与引导：")
                 head.font.bold = True
                 head.font.color.rgb = RGBColor(0xB0, 0x60, 0x00)
                 head.font.name = LATIN_FONT
                 head._element.rPr.rFonts.set(qn("w:eastAsia"), HEAD_FONT)
                 self.add_rich(note, self._c(kp.teaching_notes))
-            if kp.source_quote:
-                quote = self._p(f"字幕依据：「{self._c(kp.source_quote)}」", size=9,
-                                color=RGBColor(0x99, 0x99, 0x99), indent=0.15)
-                quote.paragraph_format.space_after = Pt(8)
+
+            # 6. 板书画面
             if kp.board_shot:
-                self._image(kp.board_shot, "板书要点（本知识点总结画面）")
+                self._image(kp.board_shot, "板书精要总结画面")
+
+            # 7. 紧跟针对性典型例题！
             if kp.examples:
-                self._p("本节例题", size=10.5, bold=True, indent=0.15)
+                sub_head = self._p("【配套针对典例精讲】", size=11, bold=True, color=RGBColor(0x1F, 0x38, 0x64), indent=0.1)
+                sub_head.paragraph_format.space_before = Pt(6)
+                sub_head.paragraph_format.space_after = Pt(3)
                 for ex in kp.examples:
-                    self._example_preview(ex)
+                    self._render_example_teacher(ex)
 
-    def _example_preview(self, ex) -> None:
-        """知识点后面的例题速览：题干 + 原图 + 答案，详细解析见「例题精讲」。"""
-        head = self.doc.add_paragraph()
-        head.paragraph_format.left_indent = Inches(0.3)
-        head.paragraph_format.space_before = Pt(6)
-        run = head.add_run(f"{ex.id}．{ex.title}")
-        run.font.bold = True
-        run.font.size = Pt(10)
-        run.font.name = LATIN_FONT
-        run._element.rPr.rFonts.set(qn("w:eastAsia"), HEAD_FONT)
-        tag = self._p(
-            f"[{fmt_ts(ex.ts_start)}]{' · ' + '、'.join(ex.tags) if ex.tags else ''}"
-            f"{' · ' + ex.difficulty if ex.difficulty else ''}",
-            size=8.5, color=RGBColor(0x88, 0x88, 0x88), indent=0.3,
-        )
-        tag.paragraph_format.space_after = Pt(1)
-        if not ex.verified:
-            self._p("⚠ 题干未经画面确认，请对照视频复核。", size=8.5,
-                    color=RGBColor(0xC0, 0x39, 0x2B), indent=0.3)
-        body = ex.statement_latex or ex.statement_plain
-        for line in (body or "").split("\n"):
-            if line.strip():
-                self._p(line.strip(), size=10, indent=0.35)
-        self._image(ex.shot, f"{ex.id} 题目原图", max_width=4.6)
+    def _render_example_teacher(self, ex: Example) -> None:
+        """教师版典例精析：排版紧凑美观、讲练针对性强。"""
+        # 1. 例题头部标题
+        head_p = self._p(style="Heading 3")
+        r = head_p.add_run(f"▸ 针对典例 · {ex.id}．{self._c(ex.title)}")
+        r.bold = True
+
+        # 2. 标签与难度信息
+        bits = []
+        if ex.difficulty:
+            bits.append(f"难度：{ex.difficulty}")
+        if ex.tags:
+            bits.append(f"考点分类：{'、'.join(ex.tags)}")
+        if bits:
+            tag_p = self._p(size=9, color=RGBColor(0x66, 0x66, 0x66), indent=0.15)
+            tag_p.add_run("〔" + "　｜　".join(bits) + "〕")
+            tag_p.paragraph_format.space_after = Pt(2)
+
+        # 3. 题干与原图
+        stmt = self._c(ex.statement_latex or ex.statement_plain)
+        if stmt:
+            p_q = self._p(indent=0.15)
+            p_q.add_run("【题面与已知条件】 ").bold = True
+            for line in stmt.split("\n"):
+                line_str = line.strip()
+                if line_str:
+                    self._p(line_str, indent=0.25)
+        self._image(ex.shot, f"{ex.id} 题目原图")
+
+        # 4. 参考答案
         if ex.answer:
-            self._p(f"答案：{ex.answer}", size=10, indent=0.35)
-        more = self._p("（完整分步解析见「二、例题精讲」）", size=8.5,
-                       color=RGBColor(0x99, 0x99, 0x99), indent=0.35)
-        more.paragraph_format.space_after = Pt(2)
+            ans_p = self._p(indent=0.15)
+            r_ans = ans_p.add_run("【参考答案】 ")
+            r_ans.bold = True
+            r_ans.font.color.rgb = RGBColor(0x1F, 0x4E, 0x79)
+            self.add_rich(ans_p, self._c(ex.answer))
 
-    def _examples_teacher(self) -> None:
-        """教师版例题：原图 + 分步解析 + 答案 + 讲解要点。
+        # 5. 规范分步精析
+        steps = [self._c(s) for s in ex.solution if self._c(s)]
+        if steps:
+            p_sol = self._p("【规范解法与分步剖析】", size=10, bold=True, color=RGBColor(0x1F, 0x4E, 0x79), indent=0.15)
+            p_sol.paragraph_format.space_before = Pt(3)
+            p_sol.paragraph_format.space_after = Pt(2)
+            for i, step in enumerate(steps, 1):
+                para = self.doc.add_paragraph()
+                para.paragraph_format.left_indent = Inches(0.35)
+                para.paragraph_format.space_after = Pt(2)
+                run = para.add_run(f"第 {i} 步：")
+                run.font.bold = True
+                run.font.color.rgb = RGBColor(0x2E, 0x5C, 0x8A)
+                run.font.name = LATIN_FONT
+                run._element.rPr.rFonts.set(qn("w:eastAsia"), HEAD_FONT)
+                self.add_rich(para, step)
+        else:
+            self._p("▸ 提示：视频中主要为教师口头点拨与引导分析，建议引导学生在草稿本上独立推导演算。",
+                    size=9, color=RGBColor(0x88, 0x88, 0x88), indent=0.2)
 
-        老师只报答案没讲过程的，解析就是空的——这里尊重字幕事实，不替老师编。
-        """
-        for kp in self.lesson.knowledge:
-            for ex in kp.examples:
-                head = f"{ex.id}．{self._c(ex.title)}"
-                self._p(head, style="Heading 2")
-                tags = "　".join(filter(None, [
-                    f"[{fmt_ts(ex.ts_start)}–{fmt_ts(ex.ts_end)}]",
-                    f"难度：{ex.difficulty}" if ex.difficulty else "",
-                    f"考点：{'、'.join(ex.tags)}" if ex.tags else "",
-                ]))
-                meta_line = self._p(size=9, color=RGBColor(0x88, 0x88, 0x88))
-                meta_line.add_run(tags)
-                if not ex.verified:
-                    warn = self._p(
-                        "⚠ 该题截图未通过画面确认，题干可能不完整，请对照视频复核。",
-                        size=9, color=RGBColor(0xC0, 0x39, 0x2B), bold=True, indent=0.15,
-                    )
-                    warn.paragraph_format.space_after = Pt(2)
+        # 6. 名师点拨与解题通法
+        if ex.notes:
+            note_p = self._p(indent=0.15)
+            note_p.paragraph_format.space_before = Pt(2)
+            h = note_p.add_run("【名师点拨与解题通法】 ")
+            h.bold = True
+            h.font.color.rgb = RGBColor(0xB0, 0x60, 0x00)
+            self.add_rich(note_p, self._c(ex.notes), size=9.5)
 
-                self._p("【题目】", size=10.5, bold=True, indent=0.15)
-                body = self._c(ex.statement_latex or ex.statement_plain)
-                for line in body.split("\n"):
-                    if line.strip():
-                        self._p(line.strip(), indent=0.2)
-                self._image(ex.shot, "原视频画面")
-
-                if ex.answer:
-                    self._p("【答案】", size=10.5, bold=True, indent=0.15)
-                    self._p(self._c(ex.answer), indent=0.2)
-
-                steps = [self._c(s) for s in ex.solution if self._c(s)]
-                if steps:
-                    self._p("【解析】", size=10.5, bold=True, indent=0.15)
-                    for i, step in enumerate(steps, 1):
-                        para = self.doc.add_paragraph()
-                        para.paragraph_format.left_indent = Inches(0.35)
-                        para.paragraph_format.space_after = Pt(2)
-                        run = para.add_run(f"{i}. ")
-                        run.font.bold = True
-                        run.font.name = LATIN_FONT
-                        self.add_rich(para, step)
-                else:
-                    self._p("▸ 视频里老师只报了答案，没有展开讲解。",
-                            size=9, color=RGBColor(0x88, 0x88, 0x88), indent=0.2)
-
-                if ex.notes:
-                    self._p(f"▸ 提示：{self._c(ex.notes)}", size=9,
-                            color=RGBColor(0x88, 0x88, 0x88), indent=0.2)
-
-    def _common_mistakes(self) -> None:
+    def _common_mistakes(self, num: str = "四") -> None:
         if not self.lesson.common_mistakes:
             return
-        self._p("五、易错点汇总", style="Heading 1")
+        self._p(f"{num}、全课核心思想与易错点汇总", style="Heading 1")
         for item in self.lesson.common_mistakes:
             self._bullet(self._c(item))
 
-    def _flow_table(self) -> None:
+    def _flow_table(self, num: str = "六") -> None:
         if not self.lesson.flow:
             return
-        self._p("七、课堂流程与时间分配", style="Heading 1")
+        self._p(f"{num}、课堂流程与时间分配建议", style="Heading 1")
         table = self.doc.add_table(rows=1, cols=5)
         table.style = "Table Grid"
         headers = ["环节", "时长(分)", "教师活动", "教师话术", "设计意图"]
@@ -513,10 +662,10 @@ class DocxBuilder:
             row.cells[3].width = Inches(1.8)
             row.cells[4].width = Inches(1.4)
 
-    def _homework(self) -> None:
+    def _homework(self, num: str = "七") -> None:
         if not self.lesson.homework:
             return
-        self._p("八、课后作业", style="Heading 1")
+        self._p(f"{num}、课后作业与巩固练习", style="Heading 1")
         self._homework_items()
 
     def _homework_items(self) -> None:
@@ -530,7 +679,7 @@ class DocxBuilder:
 
     def _review(self) -> None:
         r = self.lesson.review
-        self._p("附、审核记录", style="Heading 1")
+        self._p("附、教案审核与备课说明", style="Heading 1")
         # 模型交叉审核没跑成时，不能拿"规则体检通过"冒充"审核通过"
         if r.model_review_ok:
             verdict_cn = {"pass": "✅ 通过", "revise": "⚠ 已修订，仍建议人工复核", "fail": "❌ 未通过"}.get(

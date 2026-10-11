@@ -80,7 +80,7 @@ def segment(
     if progress:
         progress(0.15, f"字幕共 {len(cues)} 段 / {len(transcript)} 字，交给模型切分知识点…")
 
-    data = client.chat_object(
+    data = client.chat_json(
         [{"role": "system", "content": SEGMENT_SYSTEM}, {"role": "user", "content": user_msg}],
         temperature=0.1,
         # 这一步是"在字幕里找板块边界"的机械活，不需要深度思考。
@@ -90,7 +90,14 @@ def segment(
         label="segment",
     )
 
-    raw_segments = data.get("segments") or data.get("knowledge_points") or []
+    raw_segments: list[dict] = []
+    if isinstance(data, list):
+        raw_segments = [x for x in data if isinstance(x, dict)]
+    elif isinstance(data, dict):
+        raw_segments = data.get("segments") or data.get("knowledge_points") or data.get("knowledge") or []
+        if not raw_segments and ("title" in data or "ts_start" in data):
+            raw_segments = [data]
+
     if not isinstance(raw_segments, list) or not raw_segments:
         raise ValueError(f"模型没有切出任何知识点：{str(data)[:300]}")
 
@@ -129,9 +136,9 @@ def segment(
 
     kps = _normalize(kps, duration)
 
-    topic = str(data.get("topic") or "").strip()
-    subject = subject_hint or str(data.get("subject") or "").strip()
-    grade = grade_hint or str(data.get("grade") or "").strip()
+    topic = str(data.get("topic") or "").strip() if isinstance(data, dict) else ""
+    subject = subject_hint or (str(data.get("subject") or "").strip() if isinstance(data, dict) else "")
+    grade = grade_hint or (str(data.get("grade") or "").strip() if isinstance(data, dict) else "")
     if not topic and kps:
         topic = kps[0].title
 

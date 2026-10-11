@@ -157,22 +157,25 @@ def transcribe_examples(
     shots_dir: Path,
     progress: Progress | None = None,
 ) -> None:
-    """就地填充每道例题的题干、答案确认状态与最终截图。"""
-    client = MiniMaxClient()
+    """并发填充每道例题的题干、答案确认状态与纯净裁剪截图（自动剔除老师人物）。"""
+    from app.llm.parallel import run_batches
+    from app.media.frames import crop_problem_image
+
     all_ex = [(kp, ex) for kp in kps for ex in kp.examples]
     total = len(all_ex)
-    ok_count = 0
-    cross_checked = 0
-    cross_mismatch = 0
+    if not total:
+        if progress:
+            progress(1.0, "没有需要转写的例题")
+        return
 
-    for idx, (kp, ex) in enumerate(all_ex, 1):
+    def _worker(item: tuple[KnowledgePoint, Example], idx: int) -> tuple[bool, str]:
+        kp, ex = item
+        sub_client = MiniMaxClient()
         frames = candidates.get(ex.id) or []
         if not frames:
             ex.verified = False
             ex.notes = _merge_notes(ex.notes, "⚠ 未能截取到画面")
-            if progress:
-                progress(idx / max(1, total), f"{ex.id} 没有可用截图，跳过转写")
-            continue
+            return False, f"{ex.id} 没有可用截图"
 
         context = build_transcript_context(cues, ex.ts_start, ex.ts_end)
         prompt = TRANSCRIBE_USER.format(
@@ -182,12 +185,13 @@ def transcribe_examples(
             context=context[:1200] or "（无字幕上下文）",
         )
 
-        # 第一遍：按优先级找第一张"确实是完整题干"的候选帧
         accepted = None
         rejects: list[str] = []
         failures = 0
+
+        # 按优先级找第一张"确实是完整题干"的候选帧
         for frame in frames:
-            data, err = _ask(client, prompt, frame)
+            data, err = _ask(sub_client, prompt, frame)
             if data is None:
                 failures += 1
                 rejects.append(f"{frame.name}: {err}")
@@ -197,60 +201,44 @@ def transcribe_examples(
             statement = sanitize_latex(str(data.get("statement_latex") or ""))
             if has_problem and conf >= ACCEPT_CONFIDENCE and len(statement) >= 6:
                 accepted = (data, frame, statement)
-                break
+                # 高置信度直接确认，无需继续耗时扫描其他候选
+                if conf >= 0.78:
+                    break
             rejects.append(f"{frame.name}: " + ("画面里没有题目" if not has_problem else f"把握不足({conf:.2f})"))
 
         if accepted is None:
             ex.verified = False
-            ex.shot = frames[0].name
+            clean_name = f"{ex.id}_clean.jpg"
+            clean_path = shots_dir / clean_name
+            crop_problem_image(frames[0], clean_path)
+            ex.shot = clean_name if clean_path.exists() else frames[0].name
             ex.shot_confidence = 0.0
-            # 全是调用故障 vs 全是"图里没题"，要分开说，否则排查方向会完全跑偏
             if failures == len(frames):
                 ex.notes = _merge_notes(
                     ex.notes,
-                    f"⚠ 看图转写全部调用失败（{len(frames)} 张），不是画面问题：" + "；".join(rejects[:2]),
+                    f"⚠ 看图转写调用失败（{len(frames)} 张）：" + "；".join(rejects[:2]),
                 )
             else:
                 ex.notes = _merge_notes(ex.notes, "⚠ 未确认到完整题目：" + "；".join(rejects[:3]))
-            if progress:
-                progress(idx / max(1, total), f"⚠ {ex.id} 转写失败，建议人工看图")
-            continue
+            return False, f"⚠ {ex.id} 转写未确认"
 
         data, frame, statement = accepted
-        cross_checked += 1
+        _apply(ex, data, frame, statement, shots_dir=shots_dir)
+        return True, f"✅ {ex.id} 题干已确认并完成纯净裁剪"
 
-        # 第二遍：多模态有采样随机性，同一帧两次读也可能不同（尤其正负号）。
-        # 用另一张候选帧独立转写一遍，对不上就仲裁。
-        others = [f for f in frames if f != frame]
-        if others:
-            second = _ask(client, prompt, others[0])
-            second_text = ""
-            if isinstance(second, dict) and second.get("has_problem"):
-                second_text = sanitize_latex(str(second.get("statement_latex") or ""))
-            if second_text and _normalize_for_compare(second_text) != _normalize_for_compare(statement):
-                cross_mismatch += 1
-                resolved = _arbitrate(client, prompt, [frame, others[0]], statement, second_text)
-                if resolved:
-                    statement = resolved
-                else:
-                    ex.verified = False
-                    ex.notes = _merge_notes(
-                        ex.notes,
-                        "⚠ 两帧转写不一致且无法仲裁，请人工核对：" + _diff_hint(statement, second_text),
-                    )
-
-        _apply(ex, data, frame, statement)
-        if ex.verified:
-            ok_count += 1
+    def _on_prog(done_count: int, n: int) -> None:
         if progress:
-            mark = "✅" if ex.verified else "⚠"
             progress(
-                idx / max(1, total),
-                f"{mark} {ex.id}「{ex.title[:16]}」{'题干已转写' if ex.verified else '转写存疑，请人工核对'}",
+                done_count / max(1, n),
+                f"例题看图转写并发推进中 ({done_count}/{n})"
             )
 
+    results = run_batches(all_ex, _worker, label="例题看图", on_progress=_on_prog)
+    ok_count = sum(1 for r in results if r and r[0])
+
     if progress:
-        progress(1.0, f"例题转写完成：{ok_count}/{total} 道确认成功，交叉核对 {cross_checked} 道、分歧 {cross_mismatch} 道")
+        progress(1.0, f"例题看图完成：{ok_count}/{total} 道题目确认成功并生成纯净切图")
+
 
 
 def _ask(client, prompt: str, frame: Path) -> tuple[dict | None, str]:
@@ -306,14 +294,24 @@ def _diff_hint(a: str, b: str) -> str:
     return "疑似差异：" + "，".join(parts)
 
 
-def _apply(ex: Example, data: dict, frame: Path, statement: str) -> None:
-    """把确认过的题干写进例题。"""
+def _apply(ex: Example, data: dict, frame: Path, statement: str, shots_dir: Path | None = None) -> None:
+    """把确认过的题干写进例题，并生成纯净裁切图像（排除老师人像）。"""
+    from app.media.frames import crop_problem_image
+
     conf = _as_conf(data.get("confidence"))
     ex.statement_latex = statement
     ex.statement_plain = str(data.get("statement_plain") or "").strip() or statement
-    ex.shot = frame.name
     ex.shot_confidence = conf
     ex.verified = True
+
+    if shots_dir:
+        clean_name = f"{ex.id}_clean.jpg"
+        clean_path = shots_dir / clean_name
+        crop_box = data.get("crop_box")
+        crop_problem_image(frame, clean_path, crop_box=crop_box)
+        ex.shot = clean_name if clean_path.exists() else frame.name
+    else:
+        ex.shot = frame.name
 
     label = str(data.get("problem_label") or "").strip()
     if label and label not in ex.title:

@@ -55,8 +55,14 @@ def _coerce_object(value: Any) -> Any:
         return value
     if len(dicts) == 1:
         return dicts[0]
-    # 有多个对象时取字段最多的那个：教案本体远大于它内部的条目
-    return max(dicts, key=len)
+    # 只有当其中恰好有 1 个字典包含明显的大容器键（如 topic/segments/knowledge/meta/objectives），
+    # 且其它字典只是附属 noise（例如 {"note": "..."}）时，才解包出该主体对象。
+    main_keys = {"topic", "segments", "knowledge", "meta", "objectives", "modules"}
+    main_candidates = [d for d in dicts if any(k in d for k in main_keys)]
+    if len(main_candidates) == 1:
+        return main_candidates[0]
+    # 否则这是一个真正的列表（如知识点列表、例题列表），必须完整保留整个列表！
+    return value
 
 
 class LLMError(RuntimeError):
@@ -137,7 +143,20 @@ def _strip_wrapper(text: str) -> str:
     "空壳教案"，而且飘忽不定，正是"抽卡"的根源。
     """
     if "<think>" in text and "</think>" not in text:
-        text = text.split("<think>", 1)[0]
+        before = text.split("<think>", 1)[0].strip()
+        if before:
+            text = before
+        else:
+            after = text.split("<think>", 1)[1]
+            for marker in ("```json", "```", "{\n", '{"', "[\n", "[{"):
+                if marker in after:
+                    text = marker + after.split(marker, 1)[1]
+                    break
+            else:
+                # 一个标记都没找到：正文一个字节都没吐出来，<think> 之后
+                # 整段都是思考。必须清空，不能原样留着——留着它，
+                # _scan_blobs 会去扫思考里那些不配平的 LaTeX 花括号。
+                text = ""
     prev = None
     while prev != text:
         prev = text
@@ -371,7 +390,7 @@ class ModelClient:
         if style == "minimax":
             # MiniMax 系列：max_completion_tokens + thinking.type + response_format
             payload["max_completion_tokens"] = tokens
-            if mode and mode != "disabled":
+            if mode:
                 payload["thinking"] = {"type": mode}
             if json_mode:
                 payload["response_format"] = {"type": "json_object"}
@@ -675,6 +694,8 @@ class ModelClient:
         if isinstance(data, list):
             dicts = [x for x in data if isinstance(x, dict)]
             if dicts:
+                if any("title" in d for d in dicts):
+                    return {"segments": dicts}
                 return max(dicts, key=len)
 
         # ---- 结构对不上：把内容原样还给它，让它自己套 schema ----
@@ -702,6 +723,8 @@ class ModelClient:
         if isinstance(data, list):
             dicts = [x for x in data if isinstance(x, dict)]
             if dicts:
+                if any("title" in d for d in dicts):
+                    return {"segments": dicts}
                 return max(dicts, key=len)
 
         raise LLMError(

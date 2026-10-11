@@ -1,46 +1,27 @@
-"""结构体检：任意 .docx，数原生公式、图片、表格、章节，并抽查题干文字。"""
-import re
 import sys
-import zipfile
 from pathlib import Path
-
 from docx import Document
 
-path = Path(sys.argv[1])
-doc = Document(path)
+sys.stdout.reconfigure(encoding="utf-8")
+ep_dir = Path("workspace/series_line_circle/ep119")
+teacher_docx = ep_dir / "【P119精讲】直线的倾斜角与斜率_教师备课版.docx"
+student_docx = ep_dir / "【P119精讲】直线的倾斜角与斜率_学生随堂版.docx"
 
-# OMML 原生公式对象
-with zipfile.ZipFile(path) as z:
-    xml = z.read("word/document.xml").decode("utf-8")
-    media = [n for n in z.namelist() if n.startswith("word/media/")]
+print("=== Checking Teacher Docx ===")
+doc_t = Document(teacher_docx)
+print(f"Paragraphs: {len(doc_t.paragraphs)}, Tables: {len(doc_t.tables)}")
+t_text = "\n".join(p.text for p in doc_t.paragraphs if p.text)
+for ex_id in ["ex1", "ex2", "ex3", "ex4", "ex5", "ex6", "ex7", "ex8", "ex9", "ex10"]:
+    title_hit = f"抢答判断题" in t_text or f"例题" in t_text or f"综合练习" in t_text
+print(f"Teacher doc text sample:\n{t_text[:500]}...")
 
-n_omml = len(re.findall(r"<m:oMath[ >]", xml))
-n_omml_para = len(re.findall(r"<m:oMathPara[ >]", xml))
-n_inline_img = len(re.findall(r"<a:blip", xml))
+print("\n=== Checking Student Docx ===")
+doc_s = Document(student_docx)
+print(f"Paragraphs: {len(doc_s.paragraphs)}, Tables: {len(doc_s.tables)}")
+s_text = "\n".join(p.text for p in doc_s.paragraphs if p.text)
+print(f"Student doc text sample:\n{s_text[:500]}...")
 
-paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-heads = [p.text.strip() for p in doc.paragraphs if p.style.name.startswith("Heading")]
-
-print(f"文件      ：{path.name}")
-print(f"大小      ：{path.stat().st_size / 1024:.1f} KB")
-print(f"原生公式  ：{n_omml} 个（独立公式段 {n_omml_para} 个）")
-print(f"图片      ：{n_inline_img} 处引用 / {len(media)} 个媒体文件")
-print(f"表格      ：{len(doc.tables)} 个")
-print(f"非空段落  ：{len(paras)} 段")
-print(f"章节标题  ：{len(heads)} 个")
-print()
-print("章节列表：")
-for h in heads:
-    print(f"  · {h}")
-
-# 题干抽查：找含 < 的行，验证是不是 -2<x<m
-print()
-print("题干抽查（数学不等式）：")
-hits = [p for p in paras if re.search(r"-2\s*<\s*x\s*<\s*m", p)]
-for p in hits:
-    print(f"  ✅ 命中：{p[:120]}")
-if not hits:
-    print("  ⚠ 正文段落里没直接命中 '-2<x<m'，可能公式在 OMML 里（正常）")
-    omml_text = " ".join(re.findall(r"<m:t[^>]*>([^<]*)</m:t>", xml))
-    for frag in re.findall(r".{0,40}-2.{0,40}", omml_text)[:5]:
-        print(f"     OMML 片段：{frag!r}")
+# Check inline shapes (images embedded)
+print("\n=== Checking Images in Docs ===")
+print("Teacher doc inline shapes count:", len(doc_t.inline_shapes))
+print("Student doc inline shapes count:", len(doc_s.inline_shapes))

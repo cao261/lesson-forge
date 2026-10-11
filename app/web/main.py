@@ -393,6 +393,16 @@ def lesson_json(job_id: str) -> FileResponse:
 
 
 # ------------------------------------------------------------------ 历史
+def _history_dir(folder: str) -> Path:
+    """把 URL 里的 folder 段收敛成工作区内的单个子目录。
+
+    Path(folder).name 挡掉 ".." 和路径分隔符。少了这一步，
+    folder=".." 会通过 work.exists() 校验并落到仓库根目录，
+    下载/预览/截图三个接口就都能读到工作区之外的文件。
+    """
+    return SETTINGS.workspace_dir / Path(folder).name
+
+
 @app.get("/api/history")
 def history() -> JSONResponse:
     items = []
@@ -404,7 +414,11 @@ def history() -> JSONResponse:
             data = json.loads(lesson_file.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             continue
-        docs = sorted(folder.glob("*.docx"))
+        teacher_docx = next(folder.glob("*教师备课版*.docx"), None) or next(folder.glob("*.docx"), None)
+        student_docx = next(folder.glob("*学生讲义*.docx"), None)
+        has_teacher_html = next(folder.glob("*教师备课版*.html"), None) is not None
+        has_student_html = next(folder.glob("*学生讲义*.html"), None) is not None
+
         items.append({
             "id": folder.name,
             "title": data.get("meta", {}).get("title", folder.name),
@@ -412,18 +426,57 @@ def history() -> JSONResponse:
             "generated_at": data.get("meta", {}).get("generated_at", ""),
             "stats": data.get("stats", {}),
             "verdict": data.get("review", {}).get("verdict", ""),
-            "docx": f"/api/history/{folder.name}/docx",
+            "docx": f"/api/history/{folder.name}/docx?audience=teacher",
+            "docx_student": f"/api/history/{folder.name}/docx?audience=student" if student_docx else "",
+            "preview": f"/api/history/{folder.name}/preview?audience=teacher" if has_teacher_html else "",
+            "preview_student": f"/api/history/{folder.name}/preview?audience=student" if has_student_html else "",
         })
     return JSONResponse({"items": items})
 
 
 @app.get("/api/history/{folder}/docx")
-def history_docx(folder: str) -> FileResponse:
-    work = SETTINGS.workspace_dir / folder
-    docs = sorted(work.glob("*.docx"))
-    if not docs:
-        raise HTTPException(404, "该记录还没有 Word 文件")
-    return FileResponse(docs[0], filename=docs[0].name)
+def history_docx(folder: str, audience: str = "teacher") -> FileResponse:
+    work = _history_dir(folder)
+    if not work.exists():
+        raise HTTPException(404, "该记录文件夹不存在")
+    pattern = "*学生讲义*.docx" if audience == "student" else "*教师备课版*.docx"
+    doc = next(work.glob(pattern), None)
+    if not doc:
+        docs = sorted(work.glob("*.docx"))
+        if not docs:
+            raise HTTPException(404, "该记录还没有 Word 文件")
+        doc = docs[0]
+    return FileResponse(
+        doc,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=doc.name,
+    )
+
+
+@app.get("/api/history/{folder}/preview")
+def history_preview(folder: str, audience: str = "teacher") -> HTMLResponse:
+    work = _history_dir(folder)
+    if not work.exists():
+        raise HTTPException(404, "该记录文件夹不存在")
+    pattern = "*学生讲义*.html" if audience == "student" else "*教师备课版*.html"
+    preview_file = next(work.glob(pattern), None)
+    if not preview_file:
+        htmls = sorted(work.glob("*.html"))
+        if not htmls:
+            raise HTTPException(404, "该记录没有 HTML 预览文件")
+        preview_file = htmls[0]
+    html = preview_file.read_text(encoding="utf-8")
+    html = html.replace('src="shots/', f'src="/api/history/{folder}/shots/')
+    return HTMLResponse(html)
+
+
+@app.get("/api/history/{folder}/shots/{name}")
+def history_shot(folder: str, name: str) -> FileResponse:
+    work = _history_dir(folder)
+    path = work / "shots" / Path(name).name
+    if not path.exists():
+        raise HTTPException(404, "图片不存在")
+    return FileResponse(path)
 
 
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")

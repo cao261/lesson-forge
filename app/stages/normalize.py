@@ -20,7 +20,7 @@ from difflib import SequenceMatcher
 
 from app.models import KnowledgePoint
 
-# 题干相似度到这个程度就当成同一道题
+# 题干相似度到这个程度就报一句"疑似同一道题"（只报，不删，见 normalize_kps）
 DUP_RATIO = 0.82
 # 时间重叠占"较短那道题"的比例超过这个值，才算真的重复。
 # 0.35 是照着真实数据定的：因式分解那节课里 ex4/ex5 是同一道三小题，
@@ -35,7 +35,12 @@ WARN_OVERLAP = 0.35
 # `$` 必须在噪声表里。以前漏了它，`$\quad$` 归一化后剩下 `$$`，
 # 于是两道一字不差的题（只是 \quad 和 \qquad 的写法不同）相似度只有 0.816，
 # 卡在 0.82 门槛下面——同一道题切了两次反而检测不出来。
-_NOISE = re.compile(r"[\s$，,。.；;：:、！!？?（）()【】\[\]「」『』“”\"'`~—\-_=+*/\\|]+")
+#
+# 而运算符 `= + - * / |` **绝不能**进噪声表。以前它们在里面，于是
+# `x^2-2x+3=0` 和 `x^2-2x-3=0` 归一化后都变成 `x^22x30`，相似度 1.000，
+# 两道不同的题被判成重复**直接删掉**，日志里只留一行。
+# 运算符是题目的语义，剥掉它就等于抹掉题目本身。这里只剥排版噪声。
+_NOISE = re.compile(r"[\s$，,。.；;：:、！!？?（）()【】\[\]「」『』“”\"'`~—_\\]+")
 
 
 def _norm(s: str) -> str:
@@ -110,7 +115,12 @@ def normalize_kps(kps: list[KnowledgePoint], duration: float = 0.0) -> list[str]
                     f"{before[0]:.0f}–{before[1]:.0f}s → {ex.ts_start:.0f}–{ex.ts_end:.0f}s"
                 )
 
-        # ---- 2. 去重：题干像 + 时间大幅重叠 = 同一道题切了两次 ----
+        # ---- 2. 去重：题干一模一样 + 时间大幅重叠 = 同一道题切了两次 ----
+        # 只有归一化后**完全相同**才敢删。以前是相似度 ≥0.82 就删，
+        # 配合把运算符当噪声剥掉的 _norm，能把两道不同的题判成重复删掉
+        # （见 _NOISE 处的实测）。像"只差 \quad 和 \qquad 写法"这种真重复，
+        # _norm 之后本来就会变成同一个串，所以放宽到完全相同并不会漏。
+        # 剩下的"很像但不完全一样"一律只报不删，和 suspicious_pairs 一个口径。
         keep: list = []
         for ex in kp.examples:
             text = _norm(ex.statement_latex) or _norm(ex.statement_plain) or _norm(ex.title)
@@ -120,17 +130,28 @@ def normalize_kps(kps: list[KnowledgePoint], duration: float = 0.0) -> list[str]
                 ktext = _norm(kept.statement_latex) or _norm(kept.statement_plain) or _norm(kept.title)
                 if not text or not ktext:
                     continue
-                if SequenceMatcher(None, text, ktext).ratio() < DUP_RATIO:
-                    continue
-                if _overlap(span, _span(kept)) >= DUP_OVERLAP:
+                if text == ktext:
                     twin = kept
                     break
             if twin is None:
+                # 不完全相同但很像的，留着并报一句，交给审核/老师判断
+                for kept in keep:
+                    ktext = _norm(kept.statement_latex) or _norm(kept.statement_plain) or _norm(kept.title)
+                    if text and ktext and SequenceMatcher(None, text, ktext).ratio() >= DUP_RATIO:
+                        notes.append(
+                            f"[{kp.id}] {kept.id} 与 {ex.id} 题干高度相似但不完全相同"
+                            f"（{text[:20]}…），已一并保留，请人工确认"
+                        )
+                        break
                 keep.append(ex)
-            else:
+            elif _overlap(span, _span(twin)) >= DUP_OVERLAP:
                 notes.append(
-                    f"[{kp.id}] 删掉重复例题 {ex.id}（与 {twin.id} 题干几乎一致且时间重叠）"
+                    f"[{kp.id}] 删掉重复例题 {ex.id}（与 {twin.id} 题干完全一致且时间重叠）"
                 )
+            else:
+                # 题干一模一样但时间离得远：老师可能在课尾把同一道题又讲了一遍，
+                # 也可能是两道巧合的题，不删。
+                keep.append(ex)
         kp.examples = keep
 
         # ---- 3. 同知识点内例题时间重叠：只提示，不自动改 ----

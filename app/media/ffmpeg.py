@@ -34,10 +34,27 @@ def ffmpeg_bin() -> str:
     return SETTINGS.ffmpeg or "ffmpeg"
 
 
+def ffprobe_bin() -> str:
+    """ffprobe 和 ffmpeg 永远装在同一个目录里。
+
+    直接写 "ffprobe" 会绕开 config._find_ffmpeg 为 winget 安装路径做的
+    查找。目标机器上 ffmpeg 常常不在 PATH（.env 里得指 FFMPEG_BIN），
+    那种情况下 ffprobe 同样不在 PATH，探测会静默失败。
+    """
+    configured = ffmpeg_bin()
+    if Path(configured).name.lower().startswith("ffprobe"):
+        return configured
+    for name in ("ffprobe.exe", "ffprobe"):
+        sibling = Path(configured).with_name(name)
+        if sibling.exists():
+            return str(sibling)
+    return "ffprobe"
+
+
 def probe_duration(path: Path) -> float:
     proc = run(
         [
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            ffprobe_bin(), "-v", "error", "-show_entries", "format=duration",
             "-of", "json", str(path),
         ],
         timeout=120,
@@ -54,7 +71,10 @@ def extract_audio(video: Path, out_wav: Path, progress: Progress | None = None) 
         progress(0.0, f"抽取音轨 → {out_wav.name}")
     run(
         [
-            ffmpeg_bin(), "-y", "-i", str(video),
+            ffmpeg_bin(), "-y",
+            "-err_detect", "ignore_err",
+            "-fflags", "+genpts+discardcorrupt",
+            "-i", str(video),
             "-vn", "-ac", "1", "-ar", "16000",
             "-c:a", "pcm_s16le", str(out_wav),
         ]
@@ -70,7 +90,7 @@ def extract_frames(
     end: float,
     out_dir: Path,
     fps: float = 1.0,
-    quality: int = 3,
+    quality: int = 2,
 ) -> list[Path]:
     """在 [start, end] 区间按 fps 抽帧到 out_dir，返回按时间排序的文件列表。"""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -82,7 +102,7 @@ def extract_frames(
             ffmpeg_bin(), "-y",
             "-ss", f"{max(0.0, start):.3f}", "-to", f"{end:.3f}",
             "-i", str(video),
-            "-vf", f"fps={fps},scale='min(1280,iw)':-2",
+            "-vf", f"fps={fps},scale='min(1920,iw)':-2",
             "-q:v", str(quality),
             str(out_dir / "f_%05d.jpg"),
         ]
@@ -90,7 +110,7 @@ def extract_frames(
     return sorted(out_dir.glob("f_*.jpg"))
 
 
-def extract_frame(video: Path, ts: float, out_png: Path, width: int = 1280) -> Path:
+def extract_frame(video: Path, ts: float, out_png: Path, width: int = 1920) -> Path:
     """精确抽取某一时刻的单帧。"""
     out_png.parent.mkdir(parents=True, exist_ok=True)
     run(

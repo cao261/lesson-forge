@@ -87,18 +87,30 @@ def _format_opts() -> dict:
 
 
 def has_audio_stream(path: Path) -> bool:
-    """下载后必须校验：文件里得有音轨，否则转写这一步会白跑。"""
+    """下载后必须校验：文件里得有音轨，否则转写这一步会白跑。
+
+    "探测不了"和"确实没有音轨"必须分开。调用方拿到 False 会
+    `_clear_media` 删掉已经下好的视频重新下一遍，最后抛一句
+    "拿到的视频没有音轨"——可要是 ffprobe 根本没跑起来（没装 / 不在 PATH），
+    真实原因就被这句话盖掉了，还白搭一次重下。这里直接报可照着改的错。
+    """
     import subprocess
 
     try:
         proc = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=index",
-             "-of", "csv=p=0", str(path)],
+            [ffmpeg.ffprobe_bin(), "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         )
-        return bool((proc.stdout or "").strip())
-    except Exception:  # noqa: BLE001
-        return False
+    except (FileNotFoundError, PermissionError, NotADirectoryError) as exc:
+        raise FetchError(
+            f"找不到 ffprobe，没法校验音轨（{exc}）。"
+            "请在 .env 里把 FFMPEG_BIN 指向 ffmpeg.exe 的完整路径——"
+            "ffprobe 和它在同一个目录。"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise FetchError(f"ffprobe 探测音轨超时（120s）：{path.name}") from exc
+    return bool((proc.stdout or "").strip())
 
 
 def _is_local_source(url: str) -> bool:

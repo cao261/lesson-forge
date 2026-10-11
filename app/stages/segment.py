@@ -145,7 +145,10 @@ def segment(
     if progress:
         total_ex = sum(len(kp.examples) for kp in kps)
         progress(1.0, f"切出 {len(kps)} 个知识点、{total_ex} 道例题")
-    return topic, f"{subject} · {grade}".strip(" ·"), kps
+    # 中间的 "·" 必须留着：只有一端有值时也要写成 " · 高一" / "数学 · "，
+    # 下游才能靠分隔符分清哪端是空的。以前这里 .strip(" ·") 把分隔符也
+    # 去了，" · 高一" 塌成 "高一"，学科取出来就变成年级。
+    return topic, f"{subject} · {grade}", kps
 
 
 def _normalize(kps: list[KnowledgePoint], duration: float) -> list[KnowledgePoint]:

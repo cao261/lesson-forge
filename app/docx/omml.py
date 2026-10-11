@@ -7,6 +7,7 @@ MML2OMML.XSL 随 Microsoft Office 一起安装，本机探测不到时回退到�
 from __future__ import annotations
 
 import re
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -82,6 +83,30 @@ def _transform():
         return None
 
 
+_XSLT_LOCK = threading.Lock()
+
+
+def _apply_xslt(mathml: str) -> str | None:
+    """跑一次 XSLT 转换。
+
+    lxml 的 XSLT 对象**不是线程安全的**：共用同一个实例并发 transform，
+    结果可能损坏甚至直接崩在 C 层（lxml 抛不出可捕获的 Python 异常）。
+    解析 XSL 很贵（上百毫秒）所以要缓存，但真正的转换只有几毫秒，
+    串行化的代价远小于每次重新解析。
+    """
+    transform = _transform()
+    if transform is None:
+        return None
+
+    from lxml import etree
+
+    try:
+        with _XSLT_LOCK:
+            return str(transform(etree.fromstring(mathml.encode("utf-8"))))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def latex_to_omml(latex: str) -> str | None:
     """返回 OMML XML 字符串；任何一环失败都返回 None，由调用方走位图兜底。"""
     core = _strip_wrapper(latex)
@@ -99,16 +124,8 @@ def latex_to_omml(latex: str) -> str | None:
     if not mathml or "<math" not in mathml:
         return None
 
-    transform = _transform()
-    if transform is None:
-        return None
-
-    from lxml import etree
-
-    try:
-        result = transform(etree.fromstring(mathml.encode("utf-8")))
-        omml = str(result)
-    except Exception:  # noqa: BLE001
+    omml = _apply_xslt(mathml)
+    if not omml:
         return None
 
     # 去掉 XML 声明：python-docx 的 parse_xml 不接受带 encoding 的声明

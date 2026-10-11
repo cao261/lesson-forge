@@ -355,6 +355,16 @@ def run_pipeline(
     # ---------------------------------------------------------- 8. 导出
     rep = _Reporter("export", on_progress, log)
     teacher_docx, student_docx = export.export_docx_both(lesson, shots_dir, work_dir)
+    # 成品已经挪到项目外面去了，任务目录里就找不到那两份 docx。
+    # 留一份清单，历史页才知道去哪儿取——不然删掉 workspace 之外
+    # 的文件之前，网页上的"下载"会突然 404。
+    try:
+        (work_dir / "export.json").write_text(json.dumps(
+            {"docx": str(teacher_docx), "student_docx": str(student_docx)},
+            ensure_ascii=False, indent=2,
+        ), encoding="utf-8")
+    except OSError:
+        pass
     rep(0.6, f"教师备课版已生成：{teacher_docx.name}")
     rep(0.7, f"学生讲义已生成：{student_docx.name}")
     html_path = export.export_html(lesson, shots_dir, work_dir / f"{teacher_docx.stem}.html")
@@ -449,9 +459,14 @@ def _load_draft(path: Path, want: LessonMeta, reuse: bool, log: Logger | None) -
 
 
 def _first(text: str, default: str) -> str:
-    return text.split("·")[0].strip() if text else default
+    """取 "学科 · 年级" 的前半；这一端是空的就用 default。
+
+    靠 "·" 分辨两端，segment 那边即使只有一端有值也保留分隔符。
+    取空之后必须走 default，否则空串会被原样写进教案首页。
+    """
+    return (text.split("·")[0].strip() or default) if text else default
 
 
 def _second(text: str, default: str) -> str:
-    parts = text.split("·")
-    return parts[1].strip() if len(parts) > 1 else default
+    parts = text.split("·") if text else []
+    return (parts[1].strip() or default) if len(parts) > 1 else default

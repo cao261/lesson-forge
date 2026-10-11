@@ -46,6 +46,22 @@ class Job:
 
 JOBS: dict[str, Job] = {}
 
+# 常驻服务跑久了 Job 只增不减，而每个 Job 都引用着它的 result.lesson 和
+# 全部日志——几十个任务就是几十份教案的内存。留最近这么多就够了。
+MAX_JOBS = 30
+
+
+def _evict_jobs() -> None:
+    """丢掉最老的、已经结束的 Job。排队中/正在跑的绝不能动。"""
+    if len(JOBS) <= MAX_JOBS:
+        return
+    for jid, job in sorted(JOBS.items(), key=lambda kv: kv[1].created_at or 0):
+        if len(JOBS) <= MAX_JOBS:
+            break
+        if job.status in {"pending", "", "running"}:
+            continue
+        JOBS.pop(jid, None)
+
 # 批量任务共用一个工作线程，逐个跑。
 # Whisper 要占显存、模型接口有 RPM 限制，并发跑只会互相拖慢甚至把显存挤爆，
 # 所以排队是唯一稳妥的选择；单任务提交时也是立刻开跑，用户感觉不到延迟。
@@ -149,6 +165,7 @@ def get_config() -> JSONResponse:
         "providers": providers,
         "whisper": SETTINGS.whisper_model,
         "workspace": str(SETTINGS.workspace_dir),
+        "export_dir": str(SETTINGS.export_path),
         "mml2omml": bool(SETTINGS.mml2omml_xsl),
         "host": SETTINGS.host,
         "port": SETTINGS.port,
@@ -214,6 +231,7 @@ async def create_job(payload: dict) -> JSONResponse:
                   created_at=time.time())
         JOBS[job.id] = job
         jobs.append(job)
+    _evict_jobs()
     for job in jobs:
         _enqueue(job)
 
@@ -403,6 +421,15 @@ def _history_dir(folder: str) -> Path:
     return SETTINGS.workspace_dir / Path(folder).name
 
 
+def _export_manifest(folder: Path) -> dict:
+    """读任务目录里的成品清单（成品本体在项目外面的「教案」目录里）。"""
+    try:
+        data = json.loads((folder / "export.json").read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 @app.get("/api/history")
 def history() -> JSONResponse:
     items = []
@@ -414,8 +441,9 @@ def history() -> JSONResponse:
             data = json.loads(lesson_file.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             continue
-        teacher_docx = next(folder.glob("*教师备课版*.docx"), None) or next(folder.glob("*.docx"), None)
-        student_docx = next(folder.glob("*学生讲义*.docx"), None)
+        manifest = _export_manifest(folder)
+        teacher_docx = Path(manifest["docx"]) if manifest.get("docx") else None
+        student_docx = Path(manifest["student_docx"]) if manifest.get("student_docx") else None
         has_teacher_html = next(folder.glob("*教师备课版*.html"), None) is not None
         has_student_html = next(folder.glob("*学生讲义*.html"), None) is not None
 
@@ -426,7 +454,7 @@ def history() -> JSONResponse:
             "generated_at": data.get("meta", {}).get("generated_at", ""),
             "stats": data.get("stats", {}),
             "verdict": data.get("review", {}).get("verdict", ""),
-            "docx": f"/api/history/{folder.name}/docx?audience=teacher",
+            "docx": f"/api/history/{folder.name}/docx?audience=teacher" if teacher_docx else "",
             "docx_student": f"/api/history/{folder.name}/docx?audience=student" if student_docx else "",
             "preview": f"/api/history/{folder.name}/preview?audience=teacher" if has_teacher_html else "",
             "preview_student": f"/api/history/{folder.name}/preview?audience=student" if has_student_html else "",
@@ -439,13 +467,13 @@ def history_docx(folder: str, audience: str = "teacher") -> FileResponse:
     work = _history_dir(folder)
     if not work.exists():
         raise HTTPException(404, "该记录文件夹不存在")
-    pattern = "*学生讲义*.docx" if audience == "student" else "*教师备课版*.docx"
-    doc = next(work.glob(pattern), None)
-    if not doc:
-        docs = sorted(work.glob("*.docx"))
-        if not docs:
-            raise HTTPException(404, "该记录还没有 Word 文件")
-        doc = docs[0]
+    # 成品已经搬到项目外面去了，本体在清单 export.json 里指的地方。
+    manifest = _export_manifest(work)
+    key = "student_docx" if audience == "student" else "docx"
+    doc = Path(manifest[key]) if manifest.get(key) else None
+    if not doc or not doc.exists():
+        raise HTTPException(404, "成品文件不在了。它在项目外面的「教案」目录里，"
+                                 "可能是被手动移走或删除了")
     return FileResponse(
         doc,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

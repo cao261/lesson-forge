@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 from typing import Callable
@@ -17,6 +18,17 @@ from app.models import KnowledgePoint
 Progress = Callable[[float, str], None]
 
 MAX_NOTES = 400
+
+_UNSAFE_ID = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _safe_id(raw: str) -> str:
+    """例题/知识点的 id 会直接拼进截图文件名，而它是模型生成的。
+
+    不能假定它干净——路径分隔符、盘符、".." 都可能混进来。
+    只保留字母数字和 _ - .，其余换成下划线。
+    """
+    return _UNSAFE_ID.sub("_", (raw or "").strip())[:60] or "item"
 
 
 def _merge_notes(existing: str, addition: str) -> str:
@@ -52,12 +64,16 @@ def capture_examples(
             hi = min(duration, max(ex.ts_start + 12.0, min(ex.ts_start + 25.0, ex.ts_end + 5.0)))
             if hi - lo < 3:
                 hi = min(duration, lo + 3)
+            safe = _safe_id(ex.id)
             try:
-                frames = ffmpeg.extract_frames(video, lo, hi, shots_dir / f"_tmp_{ex.id}", fps=1.0)
+                frames = ffmpeg.extract_frames(video, lo, hi, shots_dir / f"_tmp_{safe}", fps=1.0)
             except Exception as exc:  # noqa: BLE001
                 if progress:
                     progress(done / max(1, total) * 0.8, f"⚠ {ex.id} 抽帧失败：{exc}")
                 result[ex.id] = []
+                # 抽帧失败时这里也会留一地临时帧——正常路径末尾会清，
+                # 走异常就绕过去了，临时帧会一直堆在 shots_dir 里。
+                shutil.rmtree(shots_dir / f"_tmp_{safe}", ignore_errors=True)
                 continue
 
             if not frames:
@@ -70,11 +86,11 @@ def capture_examples(
             candidates: list[Path] = []
             diagnostics: list[str] = []
             for i, info in enumerate(picked, 1):
-                dest = shots_dir / f"{ex.id}_c{i}.jpg"
+                dest = shots_dir / f"{safe}_c{i}.jpg"
                 shutil.copyfile(info.path, dest)
                 diagnostics.append(f"候选{i}@{_hms(info.ts)} {info.reason}")
                 candidates.append(dest)
-            shutil.rmtree(shots_dir / f"_tmp_{ex.id}", ignore_errors=True)
+            shutil.rmtree(shots_dir / f"_tmp_{safe}", ignore_errors=True)
             ex.notes = _merge_notes(ex.notes, "画面候选：" + "；".join(diagnostics))
             result[ex.id] = candidates
             if progress and candidates:
@@ -100,19 +116,21 @@ def capture_boards(
         hi = min(duration, max(lo + 5.0, first_ex if first_ex > lo else kp.ts_end))
         if hi - lo < 3:
             hi = min(duration, lo + 3)
+        safe = _safe_id(kp.id)
         try:
-            frames = ffmpeg.extract_frames(video, lo, hi, shots_dir / f"_tmpb_{kp.id}", fps=0.5)
+            frames = ffmpeg.extract_frames(video, lo, hi, shots_dir / f"_tmpb_{safe}", fps=0.5)
         except Exception:  # noqa: BLE001
+            shutil.rmtree(shots_dir / f"_tmpb_{safe}", ignore_errors=True)
             continue
         if not frames:
             continue
         infos = analyze_frames(frames, window_start=lo, fps=0.5)
         best = pick_board_frame(infos)
         if best:
-            dest = shots_dir / f"{kp.id}_board.jpg"
+            dest = shots_dir / f"{safe}_board.jpg"
             shutil.copyfile(best.path, dest)
             kp.board_shot = dest.name
-        shutil.rmtree(shots_dir / f"_tmpb_{kp.id}", ignore_errors=True)
+        shutil.rmtree(shots_dir / f"_tmpb_{safe}", ignore_errors=True)
 
 
 def _hms(seconds: float) -> str:

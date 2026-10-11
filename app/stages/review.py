@@ -242,9 +242,15 @@ def _lesson_for_review(lesson: Lesson, only_kp_ids: set[str] | None = None) -> s
 
     ``only_kp_ids`` 非空时只带这几个知识点（顶层字段照带，它们是全局性的）。
     分批评审靠它裁剪——11 个知识点 + 完整字幕一次丢进去，600 秒根本不够用。
+
+    空集合一律当"不筛选"。判断必须是真值而不是 `is not None`：全局核查
+    那一遍传的就是 set()，用 `is not None` 会把 knowledge 裁成空数组，
+    审核员看到的是一份只剩 flow/homework 的空壳教案，于是把里面
+    "引用 kp4 / 例3"判成断裂引用，凭空造出一堆假的事实错误——
+    实测直接把一份没问题的教案判成 fail。
     """
     data = lesson.model_dump()
-    if only_kp_ids is not None:
+    if only_kp_ids:
         data["knowledge"] = [k for k in data.get("knowledge", []) if k.get("id") in only_kp_ids]
     return json.dumps(data, ensure_ascii=False, indent=2)
 
@@ -258,7 +264,8 @@ def _shots_for_review(lesson: Lesson, shots_dir: Path,
     """
     rows = []
     for kp in lesson.knowledge:
-        if only_kp_ids is not None and kp.id not in only_kp_ids:
+        # 空集合 = 不筛选（全局核查传的就是 set()），和 _lesson_for_review 同一个口径
+        if only_kp_ids and kp.id not in only_kp_ids:
             continue
         board = kp.board_shot
         board_ok = (shots_dir / board).exists() if board else False

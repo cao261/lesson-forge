@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Callable
@@ -241,6 +242,11 @@ def compose(
     return lesson
 
 
+# 例题 id 的样子。合并修订结果时用来把它和知识点区分开，
+# 免得模型把例题塞进 knowledge 就凭空造出一条空知识点。
+_EXAMPLE_ID = re.compile(r"^ex\d+$", re.IGNORECASE)
+
+
 def _to_lesson(
     data: dict,
     meta: LessonMeta,
@@ -318,7 +324,20 @@ def _to_lesson(
         kp_id = str(raw.get("id") or "").strip()
         base = by_id.get(kp_id)
         if base is None:
+            # 修订时模型偶尔把**例题**当成知识点塞回 knowledge（id 形如 ex1）。
+            # 例题本来就挂在所属知识点下面，认成知识点就是凭空多出一条空条目：
+            # 审核会连报"缺少讲解摘要""时间戳倒挂"，整份教案被判结构缺陷。
+            if _EXAMPLE_ID.match(kp_id):
+                continue
+            # 同理，一条内容全空的条目只会变成空气，不该占一个知识点位。
+            if not any(str(raw.get(k) or "").strip()
+                       for k in ("title", "summary", "definition", "formula_latex")):
+                continue
             base = KnowledgePoint(id=kp_id or f"kp{len(merged) + 1}")
+            # 新建的知识点只能从模型给的原文取标题——原始切分里没有它。
+            # 只在这条分支赋值：已有知识点的标题来自切分（带【第N讲】约定），
+            # 不能被模型改写掉。
+            base.title = str(raw.get("title") or "").strip()
         if base.id in seen:
             continue
         seen.add(base.id)

@@ -107,7 +107,17 @@ with tempfile.TemporaryDirectory() as td:
           not any(f"知识点{i}｜" in sub for i in range(1, 12) if f"kp{i}" not in ids))
     check("文件存在被如实标注", "文件存在" in sub)
     check("全量清单比批量长", len(rv._shots_for_review(lesson, shots)) > len(sub))
-    check("空批次返回兜底文案", rv._shots_for_review(lesson, shots, set()) == "（本课没有知识点）")
+    # 空集合 = 不筛选，不是"筛成空"。全局核查传的就是 set()：
+    # 当成空筛选会让审核员拿到一份 knowledge 为空、flow/homework 却照常
+    # 引用着 kpN 的空壳教案，凭空造出一堆"引用断裂"的事实错误，
+    # 实测直接把没问题的教案判成 fail。
+    empty_set = rv._shots_for_review(lesson, shots, set())
+    check("空集合按不筛选处理（给全量）", empty_set == rv._shots_for_review(lesson, shots))
+    full_lesson = json.loads(rv._lesson_for_review(lesson, set()))
+    check("空集合下知识点不被裁空", len(full_lesson["knowledge"]) == 11,
+          f"剩 {len(full_lesson['knowledge'])} 个")
+    empty_l = json.loads(rv._lesson_for_review(KnowledgePoint and Lesson(), set()))
+    check("真的没有知识点时才是空", empty_l["knowledge"] == [])
 
 print()
 print("=== 用例 5：回炉按意见裁剪知识点 ===")

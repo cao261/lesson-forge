@@ -203,7 +203,7 @@ COMPOSE_USER = """以下是教学视频《{meta.source_title}》（UP主：{meta
           "difficulty": "基础/中等/较难",
           "tags": ["考查的知识点"],
           "shot": "原样保留我给的截图文件名",
-          "notes": "讲这道题时的提醒"
+          "notes": "讲这道题时的提醒（只写给老师看的教学内容）"
         }}
       ]
     }}
@@ -318,7 +318,7 @@ COMPOSE_EXAMPLES_USER = """视频《{meta.source_title}》——现在只处理�
           "difficulty": "基础/中等/较难",
           "tags": ["考查的知识点"],
           "shot": "原样保留我给的截图文件名",
-          "notes": "讲这道题时的提醒"
+          "notes": "讲这道题时的提醒（只写给老师看的教学内容）"
         }}
       ]
     }}

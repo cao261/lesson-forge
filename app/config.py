@@ -163,6 +163,11 @@ class Settings:
 
     # ---- 其它 ----
     workspace: Path = Path(os.getenv("WORKSPACE_DIR", "workspace"))
+    # 两份成品 Word 落在项目**外面**。理由很实际：workspace/ 里压着
+    # 下载的视频、抽出的音轨、字幕和截图，一节课轻松上百 MB。老师确认
+    # 教案够用之后把 workspace/ 整个删掉省硬盘，成品必须毫发无损。
+    # 默认是项目所在目录的同级「教案」文件夹。
+    export_dir: Path = Path(os.getenv("EXPORT_DIR") or (ROOT.parent / "教案"))
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", "8760"))
     mml2omml_xsl: str = _find_mml2omml()
@@ -170,6 +175,12 @@ class Settings:
     @property
     def workspace_dir(self) -> Path:
         path = self.workspace if self.workspace.is_absolute() else ROOT / self.workspace
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def export_path(self) -> Path:
+        path = self.export_dir if self.export_dir.is_absolute() else ROOT / self.export_dir
         path.mkdir(parents=True, exist_ok=True)
         return path
 

@@ -96,6 +96,70 @@ def suspicious_pairs(kps: list[KnowledgePoint]) -> list[str]:
     return out
 
 
+# 「这不是题干，是对画面的描述」的典型句式。
+# 实测踩过：概念讲解页被模型当成题，statement_latex 写成
+# 「\text{通过图形展示倾斜角与斜率不是一一对应的关系}」——
+# 这不是学生能做的题，是一句图注，混进例题里就变成了空壳。
+#
+# 注意不能单看这些词：「如图 / 见图 / 图上」在真题里非常常见
+# （"如图，直线 l 过点 A(1,2)，求斜率 k"），光凭它们判会把真题误杀。
+# 所以必须同时满足"像图注"且"没有设问"两个条件才算数。
+_DESCRIBE = re.compile(
+    r"(通过图(形|示)|图(形|示)(展示|说明|体现|呈现|反映)"
+    r"|展示了|体现了|呈现了|反映了|该图(展示|说明|体现|呈现|反映)"
+    r"|画面(中|上|里)|课件(中|上))")
+
+# 学生在题上会被要求做的事。有它就说明这确实是一道题。
+_ASK = re.compile(
+    r"(求|证明|证出|判断|是否|为什么|理由|计算|解出|填空|选择|等于多少"
+    r"|是多少|怎么做|如何求|多少)")
+
+
+def _looks_like_statement(text: str) -> bool:
+    """这段文字到底是不是一道学生能做的题。"""
+    s = (text or "").strip()
+    if len(_norm(s)) < 6:
+        return False
+    if _DESCRIBE.search(s) and not _ASK.search(s):
+        return False        # 整句都在描述画面，且没让学生做任何事 → 图注
+    return True
+
+
+def classify_exercises(kps: list[KnowledgePoint]) -> list[str]:
+    """分清"真例题"和"老师只是口述讲解"，返回人话清单。
+
+    为什么必须在 compose 之前判：切分阶段为了"题目全覆盖"，会把每一段概念
+    讲解都立成一条例题（标题就是「概念辨析·斜面向上方向」「物理类比·斜面坡度」）。
+    看图阶段又确认画面里根本没有题面，于是题干是空的。等到出 Word 时，
+    学生的「即学即练」里就只剩一个标题加一块空白答题区——完全没法用。
+
+    判据（三条全中才算口述要点，缺一不可）：
+      1. 没有题干：`statement_latex` 和 `statement_plain` 都是空的；
+      2. 视觉也没确认到题面：`verified` 为假；
+      3. 或者题干其实是对画面的描述（"通过图形展示…"），不是学生能做的题。
+    只要题干是真的题目，就当老师真的出了一道题，哪怕图没截到。
+    """
+    notes: list[str] = []
+    for kp in kps:
+        for ex in kp.examples:
+            text = (ex.statement_latex or ex.statement_plain or "").strip()
+            has_text = bool(_looks_like_statement(text))
+            if has_text or ex.verified:
+                ex.is_exercise = True
+                continue
+            ex.is_exercise = False
+            ex.statement_latex = ""        # 图注不是题干，别再往下游传
+            ex.statement_plain = ""
+            ex.shot = None                 # 没题干就别再挂着截图名，避免下游误判
+            ex.board_shot = None
+            why = "没有题干、画面里也没有题面" if not text else "题干只是对画面的描述，不是可做的题"
+            notes.append(
+                f"[{kp.id}/{ex.id}]「{ex.title}」{why}"
+                f"——按口述要点处理，不进学生的即学即练"
+            )
+    return notes
+
+
 def normalize_kps(kps: list[KnowledgePoint], duration: float = 0.0) -> list[str]:
     """就地修结构问题，返回给日志看的人话清单。"""
     notes: list[str] = []

@@ -374,6 +374,19 @@ def _to_lesson(
         base.source_quote = keep(str(raw.get("source_quote") or "").strip(),
                                  prev.source_quote if prev else "", base.source_quote)
 
+        # 模型可以显式点名要删掉哪些例题。
+        # 为什么要有这个出口：兜底恢复（下面那段 prev 补齐）是防止"模型漏写
+        # 字段就把辛苦生成的内容洗掉"的，但它的副作用是——模型就算看出某条
+        # 例题根本不是题、把它删了，也会被原样补回来。审核于是只能反复报
+        # 同一条"这不是一道题"，永远改不掉。显式声明的删除必须被尊重。
+        dropped_ex = {
+            str(x).strip().lower()
+            for x in (data.get("drop_examples") or [])
+            if str(x or "").strip()
+        }
+        if dropped_ex:
+            base.examples = [e for e in base.examples if e.id.lower() not in dropped_ex]
+
         # 这一批模型完全没提到的例题，也要从上一版把内容补回来。
         # 注意不能只判 `not base.examples`：原始切分结果里例题是"有壳没内容"
         # （有 id/title/时间戳，题干答案都是空的），判空会以为已经齐了。
@@ -394,7 +407,8 @@ def _to_lesson(
                 e.shot = e.shot or pe.shot
             have = {e.id for e in base.examples}
             for pe in prev.examples:
-                if pe.id not in have:
+                # 显式点过名的例题不补回来——那是模型明确要求删的
+                if pe.id not in have and pe.id.lower() not in dropped_ex:
                     base.examples.append(pe.model_copy(deep=True))
 
         for raw_ex in raw.get("examples") or []:

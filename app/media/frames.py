@@ -20,27 +20,69 @@ class FrameInfo:
     ts: float
     diff_prev: float = 0.0
     ink_color: float = 0.0
+    ink_ratio: float = 0.0
+    bg_sat: float = 0.0
     score: float = 0.0
     reason: str = ""
 
 
-def _analyze_frame(path: Path) -> tuple[np.ndarray, float]:
+# 章节标题卡的判定门槛：底色是高饱和的大色块 + 反白大字。
+# 之所以看"底色饱和度"而不只看文字多少：白底真题面上印两个彩色大字
+# （实测「对」「错」两字能把前景占比抬到 0.16，比标题卡还高），
+# 但课件正文页几乎都是白底，章节卡才是彩底——底色才区分得了这两者。
+TITLE_CARD_BG_SAT = 50.0
+TITLE_CARD_INK = 0.12
+
+
+def is_title_card(info: FrameInfo) -> bool:
+    """这一帧是章节标题卡而不是教学内容。
+
+    实测踩过的坑：kp6 的"板书图"抓成了「抢答题目」四字绿底卡片，
+    贴进教案后老师看到一张跟知识点毫无关系的图。
+    """
+    return info.bg_sat > TITLE_CARD_BG_SAT and info.ink_ratio > TITLE_CARD_INK
+
+
+def _analyze_frame(path: Path) -> tuple[np.ndarray, float, float, float]:
     with Image.open(path) as img:
         # 画面指纹（灰度缩略）：用于判定场景切换与帧间差异
-        fp = np.asarray(img.convert("L").resize((64, 36), Image.BILINEAR), dtype=np.float32) / 255.0
-        # 彩色笔迹检测（RGB 缩略）：用于识别荧光笔划重点、红蓝标记笔迹
+        gray = img.convert("L")
+        fp = np.asarray(gray.resize((64, 36), Image.BILINEAR), dtype=np.float32) / 255.0
+        # 只看内区：课件常是 4:3 信箱在 16:9 画面里，
+        # 把左右黑边算进来会让整块白幻灯片都被当成"墨迹"。
         thumb = img.convert("RGB").resize((160, 90), Image.BILINEAR)
         arr = np.asarray(thumb, dtype=np.int32)
         h, w = arr.shape[:2]
-        # 聚焦题目主体区域，规避四角固定水印与底部播放条
-        inner = arr[int(h * 0.1) : int(h * 0.85), int(w * 0.05) : int(w * 0.85)]
+        inner = arr[int(h * 0.10) : int(h * 0.85), int(w * 0.05) : int(w * 0.85)]
+        if inner.size == 0:
+            inner = arr
+
+        # 底色：内区里出现最多的颜色。章节卡是整块彩底，课件正文是白底。
+        flat = inner.reshape(-1, 3)
+        q = (flat // 24).astype(np.int32)
+        key = (q[:, 0] * 1024 + q[:, 1] * 32 + q[:, 2])
+        vals, counts = np.unique(key, return_counts=True)
+        top = int(vals[int(np.argmax(counts))])
+        bg_px = flat[key == top].mean(axis=0) if (key == top).any() else inner.reshape(-1, 3).mean(axis=0)
+        bg_sat = float(np.max(bg_px) - np.min(bg_px))
+
+        # 前景占比：与底色差异大的像素比例（纯色底反白字会非常高）
+        small = np.asarray(gray.resize((160, 90), Image.BILINEAR), dtype=np.int32)
+        sh, sw = small.shape
+        inner_small = small[int(sh * 0.10) : int(sh * 0.85), int(sw * 0.05) : int(sw * 0.85)]
+        if inner_small.size == 0:
+            inner_small = small
+        bg_l = float(np.mean(bg_px))
+        ink_ratio = float((np.abs(inner_small - bg_l) > 30).mean())
+
+        # 彩色笔迹检测（RGB 缩略）：用于识别荧光笔划重点、红蓝标记笔迹
         r, g, b = inner[:, :, 0], inner[:, :, 1], inner[:, :, 2]
         max_c = np.maximum(np.maximum(r, g), b)
         min_c = np.minimum(np.minimum(r, g), b)
         # 高饱和度笔迹（荧光绿/亮黄、红笔圈画、蓝色标注）
         colored = (max_c - min_c > 45) & (max_c > 70)
         ink_color = float(np.mean(colored))
-        return fp, ink_color
+        return fp, ink_color, ink_ratio, bg_sat
 
 
 def analyze_frames(
@@ -53,7 +95,7 @@ def analyze_frames(
     infos: list[FrameInfo] = []
     prev_fp: np.ndarray | None = None
     for i, path in enumerate(frames):
-        fp, ink_color = _analyze_frame(path)
+        fp, ink_color, ink_ratio, bg_sat = _analyze_frame(path)
         diff = 0.0 if prev_fp is None else float(np.mean(np.abs(fp - prev_fp)))
         infos.append(
             FrameInfo(
@@ -62,6 +104,8 @@ def analyze_frames(
                 ts=window_start + i / fps,
                 diff_prev=diff,
                 ink_color=ink_color,
+                ink_ratio=ink_ratio,
+                bg_sat=bg_sat,
             )
         )
         prev_fp = fp
@@ -149,6 +193,9 @@ def score_candidates(
             + 0.30 * time_score
             - pen_penalty
             - tail_penalty
+            # 章节标题卡重罚：它是纯色底反白大字，送去看图转写纯属浪费，
+            # 就算万一整窗都是卡片，它也只配当最后的兜底。
+            - (10.0 if is_title_card(info) else 0.0)
         )
         bits = [f"时间贴合={time_score:.2f}"]
         if 1 <= frames_since <= 3:
@@ -158,6 +205,8 @@ def score_candidates(
             bits.append(f"笔迹扣分={pen_penalty:.2f}")
         if tail_penalty:
             bits.append("偏后")
+        if is_title_card(info):
+            bits.append("章节标题卡，排除")
         info.reason = "，".join(bits)
         scored.append(info)
 
@@ -183,6 +232,12 @@ def pick_board_frame(
     """挑"知识点讲解结束、板书最完整"的那一帧：窗口后段里，画面稳定且接近末尾的一帧。"""
     if not infos:
         return None
+    # 章节标题卡一律出局。板书图的作用是让老师看到这一节讲了什么，
+    # 贴一张「抢答题目」的纯色卡片，对不上任何知识点，纯属噪音。
+    usable = [i for i in infos if not is_title_card(i)]
+    if not usable:                      # 整窗都是卡片，那就宁可不贴也别贴错
+        return None
+    infos = usable
     lo = int(len(infos) * tail_fraction)
     tail = infos[lo:]
     if not tail:

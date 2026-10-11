@@ -413,9 +413,13 @@ class DocxBuilder:
 
             # 学生版讲义绝不放老师手写演算的板书截图，确保学生端毫无解题痕迹
             # 2. 配套针对精练（不直接给答案，留出做题空间）
-            if kp.examples:
-                self._p("【即学即练·针对精练】", size=10.5, bold=True, color=RGBColor(0x1F, 0x4E, 0x79), indent=0.1)
-                for ex in kp.examples:
+            # 只有真例题才进「即学即练」。口述要点学生用不上：
+            # 它没有题干、没有图，给一块空白答题区等于让学生对着空气写字。
+            drills = [ex for ex in kp.examples if ex.is_exercise]
+            if drills:
+                self._p("【即学即练·针对精练】", size=10.5, bold=True,
+                        color=RGBColor(0x1F, 0x4E, 0x79), indent=0.1)
+                for ex in drills:
                     self._p(f"{ex.id}．{self._c(ex.title)}", size=11, bold=True, indent=0.15)
                     for line in (self._c(ex.statement_latex or ex.statement_plain)).split("\n"):
                         if line.strip():
@@ -449,7 +453,9 @@ class DocxBuilder:
                     ans_ch.paragraph_format.space_before = Pt(8)
                     ans_ch.paragraph_format.space_after = Pt(2)
             for ex in kp.examples:
-                if ex.answer or ex.solution:
+                # 只给真例题配答案。口述讲解本来就没题，
+                # 在答案区里挂一条只会让学生以为漏印了。
+                if ex.is_exercise and (ex.answer or ex.solution):
                     ans_p = self.doc.add_paragraph()
                     ans_p.paragraph_format.left_indent = Inches(0.2)
                     ans_p.paragraph_format.space_after = Pt(2)
@@ -612,11 +618,46 @@ class DocxBuilder:
 
             # 7. 紧跟针对性典型例题！
             if kp.examples:
-                sub_head = self._p("【配套针对典例精讲】", size=11, bold=True, color=RGBColor(0x1F, 0x38, 0x64), indent=0.1)
+                sub_head = self._p("【配套针对典例精讲】", size=11, bold=True,
+                                  color=RGBColor(0x1F, 0x38, 0x64), indent=0.1)
                 sub_head.paragraph_format.space_before = Pt(6)
                 sub_head.paragraph_format.space_after = Pt(3)
                 for ex in kp.examples:
-                    self._render_example_teacher(ex)
+                    if ex.is_exercise:
+                        self._render_example_teacher(ex)
+                    else:
+                        self._render_talk_teacher(ex)
+
+    def _render_talk_teacher(self, ex: Example) -> None:
+        """老师口述讲解、并没有出可做的题。
+
+        以前这种条目跟真例题混在一起渲染，结果就是一段「针对典例」下面
+        空着题干、挂着空白答题区——老师看着也莫名其妙。单独标出来，
+        既保留了他要知道"这一段讲了什么"，又不会误导成"这里有道题"。
+        """
+        head_p = self._p(style="Heading 3")
+        r = head_p.add_run(f"▸ 口述讲解 · {self._c(ex.title)}")
+        r.bold = True
+
+        for label, body in (("视频位置", f"{ex.ts_start:.0f}–{ex.ts_end:.0f}s"),
+                            ("老师讲法", ex.notes or ex.solution and ex.solution[0] or "")):
+            if not body:
+                continue
+            para = self._p(indent=0.2)
+            lr = para.add_run(f"{label}：")
+            lr.bold = True
+            lr.font.size = Pt(9.5)
+            lr.font.name = LATIN_FONT
+            self.add_rich(para, self._c(str(body)))
+            para.paragraph_format.space_after = Pt(2)
+
+        tip = self._p(indent=0.2)
+        tr = tip.add_run("视频里老师没有出可做的题，这段属于口头讲解；"
+                         "要练手的话请老师自行补充一道针对性练习。")
+        tr.font.size = Pt(8.5)
+        tr.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+        tr.font.name = LATIN_FONT
+        tip.paragraph_format.space_after = Pt(6)
 
     def _render_example_teacher(self, ex: Example) -> None:
         """教师版典例精析：排版紧凑美观、讲练针对性强。"""

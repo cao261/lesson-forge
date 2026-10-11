@@ -298,6 +298,17 @@ def run_pipeline(
         )
         segment.save(kps, segment_path, {"topic": topic, "subject_grade": subject_grade})
 
+    # 看图之后先分清"真例题"和"老师只是口述"：切分阶段为了"题目全覆盖"
+    # 会把每段概念讲解都立成例题，不在这里拦一道，学生的「即学即练」里
+    # 就会全是只有标题、没有题干的空壳。
+    for note in normalize.classify_exercises(kps)[:12]:
+        log(f"例题甄别：{note}")
+    talk = sum(1 for kp in kps for ex in kp.examples if not ex.is_exercise)
+    real = sum(1 for kp in kps for ex in kp.examples if ex.is_exercise)
+    if talk:
+        log(f"例题甄别：{real} 道真例题 / {talk} 段口述讲解（口述部分只进教师版的讲解要点）")
+    segment.save(kps, segment_path, {"topic": topic, "subject_grade": subject_grade})
+
     # ---------------------------------------------------------- 6. 生成教案
     rep = _Reporter("compose", on_progress, log)
     lesson_meta = LessonMeta(

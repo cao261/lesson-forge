@@ -47,6 +47,10 @@ class Example(BaseModel):
     shot_confidence: float = 0.0
     board_shot: str | None = Field(default=None, description="配套板书截图文件名")
     verified: bool = Field(default=False, description="多模态模型已确认截图里确有完整题目")
+    # 老师是口述讲解、没有出可做的题。这类"例题"曾经照常出现在学生的
+    # 「即学即练」里，只有一个标题和一个空白答题区——学生拿到手完全没法用。
+    # 判定后把它们降级成口述要点，不再冒充例题。
+    is_exercise: bool = Field(default=True, description="是否真的有一道可做的题")
     notes: str = ""
 
 
@@ -135,7 +139,12 @@ class Lesson(BaseModel):
     stats: dict[str, Any] = Field(default_factory=dict)
 
     def example_count(self) -> int:
-        return sum(len(kp.examples) for kp in self.knowledge)
+        """真正的例题数（不含口述要点）。统计口径要和 Word 里印出来的一致。"""
+        return sum(1 for kp in self.knowledge for ex in kp.examples if ex.is_exercise)
+
+    def talk_count(self) -> int:
+        """被判为"老师只是口述、没出题"的条目数。"""
+        return sum(1 for kp in self.knowledge for ex in kp.examples if not ex.is_exercise)
 
     def touch(self) -> None:
         self.meta.generated_at = time.strftime("%Y-%m-%d %H:%M:%S")

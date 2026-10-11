@@ -347,7 +347,14 @@ def review(
         ids = {k.id for k in group}
         note = (f"\n\n【重要】这是第 {no}/{len(batches)} 批，只审下面这几个知识点。"
                 f"只针对本批内容给结论，不要臆测其它知识点。"
-                f"verdict 按本批最严重的问题给。\n")
+                f"verdict 按本批最严重的问题给。\n"
+                f"\n【关于全局字段】报文里的 `stats`、`flow`、`homework`、"
+                f"`common_mistakes` 是**整份教案的全局字段**，你看到的是被裁剪过的"
+                f"知识点切片。这些字段提到本批之外的知识点（别的 kp、别的例题）是"
+                f"**正常的**，它们由最后那次全局核查负责交叉核对。"
+                f"**因此不要报「引用了不存在的知识点」「统计与条目数对不上」"
+                f"这类问题，更不要因为它们把 verdict 判成 fail。**"
+                f"你只对看得见的这几个知识点负责。\n")
         try:
             # 每个批次自己建客户端：降级状态是实例级的，共用会互相踩
             data = MiniMaxClient().chat_object(

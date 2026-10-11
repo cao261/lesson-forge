@@ -260,6 +260,78 @@ def _clean_shot(value) -> str:
     return name if _SHOT_NAME.match(name) else ""
 
 
+# ------------------------------------------------------------------ 作业溯源
+# 提示词已经禁止模型自己出题，但提示词只是"请求"，模型未必听。
+# 这里加一道本地闸门：每条作业都必须能在视频里真实出现过的例题中找到出处。
+#
+# 判据用数字指纹。数学题的"这道题是不是原题"几乎全在数字上——
+# "已知 A(1,2) 求斜率"和"已知 A(1,3) 求斜率"看着像，其实早就是另一道题了。
+# 所以只要作业里的数字集合跟任何一道例题都对不上，就判为编造。
+_NUM = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _number_fingerprint(text: str) -> set[str]:
+    return {n.rstrip("0").rstrip(".") if "." in n else n
+            for n in _NUM.findall(text or "")}
+
+
+def _append_material(materials: list[str], note: str) -> list[str]:
+    out = list(materials or [])
+    if note not in out:
+        out.append(note)
+    return out
+
+
+def _ground_homework(items: list[str], knowledge: list[KnowledgePoint]) -> list[str]:
+    """只留下能在视频例题里找到出处的作业，其余丢弃。
+
+    为什么必须本地兜底：提示词里写过"必须给 3~5 条、不许留空"，模型为了交差
+    就自己编题，还规规矩矩标注「教师自编，参照本课例题 4」。老师看到的是
+    一整页视频里压根不存在的题——那不是备课，是伪造。
+    宁可交一份空作业（老师自己会出），也不能交一份假作业。
+
+    溯源分两种：带数字的题走**数字指纹**——数学题的"是不是原题"几乎全在
+    数字上，"已知 A(1,2) 求斜率"和"已知 A(1,3) 求斜率"看着像，其实是两道题，
+    数字对不上任何一道例题就判为编造；不带数字的短句（"复习本节笔记"）
+    本来就不是编出来的题，放行。
+    """
+    if not items:
+        return []
+
+    # 视频里真实出现过的题：优先用有题干的例题，没有题干的口述要点不算题
+    sources: list[tuple[str, set[str]]] = []
+    for kp in knowledge or []:
+        for ex in kp.examples:
+            if not ex.is_exercise:
+                continue
+            text = (ex.statement_latex or ex.statement_plain or "").strip()
+            if not text:
+                continue
+            sources.append((f"{ex.id}．{ex.title}", _number_fingerprint(text)))
+
+    if not sources:
+        return []
+
+    kept: list[str] = []
+    for raw in items:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        # 明显是模型自己标的"自编"，直接毙掉
+        if "自编" in text or "自行补充" in text or "自行设计" in text:
+            continue
+        nums = _number_fingerprint(text)
+        if not nums:
+            kept.append(text)      # 不带数字，谈不上"照着改编"，放行
+            continue
+        for _label, src in sources:
+            # 作业的数字必须全部出现在某道例题里，一个都不许多
+            if src and nums <= src:
+                kept.append(text)
+                break
+    return kept
+
+
 def _to_lesson(
     data: dict,
     meta: LessonMeta,
@@ -307,7 +379,9 @@ def _to_lesson(
     lesson.prerequisites = _str_list(data.get("prerequisites")) or f.prerequisites
     lesson.materials = _str_list(data.get("materials")) or f.materials
     lesson.common_mistakes = _str_list(data.get("common_mistakes")) or f.common_mistakes
-    lesson.homework = _str_list(data.get("homework")) or f.homework
+    # 先按兜底链取值（模型漏写就沿用上一版），溯源闸门留到 knowledge 合并完再过——
+    # 这个函数要读例题题干，在 lesson.knowledge 还是空壳的时候跑，什么都溯不到。
+    _raw_homework = _str_list(data.get("homework")) or f.homework
 
     lesson.flow = [
         FlowStep(
@@ -474,6 +548,16 @@ def _to_lesson(
 
     merged.sort(key=lambda k: (order.get(k.id, 10_000), k.ts_start))
     lesson.knowledge = merged
+
+    # 现在例题都齐了，才轮到给作业上溯源闸门。
+    # 放在这里是因为它要读例题题干：早跑一步 lesson.knowledge 还是空壳，
+    # 一道作业都留不下（selfcheck_refine_patch 抓到过这个顺序错）。
+    lesson.homework = _ground_homework(_raw_homework, merged)
+    if not lesson.homework and _raw_homework:
+        lesson.materials = _append_material(
+            lesson.materials,
+            "视频中老师未布置课后作业，也没有可直接复用的题目，故本教案不列作业。")
+
     lesson.stats = {
         "knowledge_count": len(merged),
         "example_count": lesson.example_count(),

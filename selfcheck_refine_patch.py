@@ -46,7 +46,13 @@ def rich_lesson() -> tuple[Lesson, list[KnowledgePoint]]:
     ))
     old.knowledge = [kp]
     old.objectives = ["目标一", "目标二"]
-    old.homework = ["作业一", "作业二"]
+    # 作业必须是能从例题溯源出来的真题：数字与 ex1 完全一致。
+    # 用"作业一/作业二"这种占位文本测不出兜底链在干什么——
+    # 那是真教案里根本不会出现的东西。
+    old.homework = [
+        "将 $y=x^2$ 的图像左移 2 个单位，写出解析式",
+        "把 $y=x^2$ 的图像向左平移 2 个单位，求解析式，并说明顶点怎么变。",
+    ]
     # 原始切分结果：现在 segment 已经不写讲解内容了，这里就是"空"的
     raw = [KnowledgePoint(id="kp1", title="知识点一", ts_start=0.0, ts_end=600.0)]
     raw[0].examples.append(Example(id="ex1", title="例1", ts_start=10.0))

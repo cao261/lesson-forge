@@ -321,9 +321,10 @@ class DocxBuilder:
             if self.lesson.flow:
                 self._flow_table(CN_NUMS[sec_idx])
                 sec_idx += 1
-            if self.lesson.homework:
-                self._homework(CN_NUMS[sec_idx])
-                sec_idx += 1
+            # 不在这里用 `if homework` 短路：空作业也要出章节并写明原因。
+            # 整章消失的话，老师和学生都分不清是漏了还是本来就没有。
+            self._homework(CN_NUMS[sec_idx])
+            sec_idx += 1
             self._review()
             self._footer_note()
 
@@ -429,6 +430,15 @@ class DocxBuilder:
 
     def _homework_student(self) -> None:
         """学生版课后作业。"""
+        if not self.lesson.homework:
+            para = self._p(indent=0.2)
+            run = para.add_run("本节课视频中老师没有布置作业，这里就不额外加题了。"
+                               "课堂上的例题就是本节课的全部练习内容。")
+            run.font.size = Pt(9)
+            run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+            run.font.name = LATIN_FONT
+            para.paragraph_format.space_after = Pt(4)
+            return
         for i, item in enumerate(self.lesson.homework, 1):
             para = self.doc.add_paragraph()
             para.paragraph_format.left_indent = Inches(0.2)
@@ -766,7 +776,20 @@ class DocxBuilder:
             row.cells[4].width = Inches(1.4)
 
     def _homework(self, num: str = "七") -> None:
+        # 作业为空时也要出章节，但必须写明为什么空。
+        # 以前这里直接 return，整章消失；老师和学生都不知道是漏了还是本来就没有。
+        # 宁可写一句"视频里没有作业"，也不要拿视频里根本没出现过的题凑数。
         if not self.lesson.homework:
+            self._p(f"{num}、课后作业与巩固练习", style="Heading 1")
+            para = self._p(indent=0.2)
+            run = para.add_run(
+                "视频中老师未布置课后作业，本教案也不另行编题。"
+                "需要作业时，请老师从上方「配套针对典例精讲」里挑题布置——"
+                "那些都是视频里真实出现过的题目，附有原视频截图和参考答案。")
+            run.font.size = Pt(9)
+            run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+            run.font.name = LATIN_FONT
+            para.paragraph_format.space_after = Pt(4)
             return
         self._p(f"{num}、课后作业与巩固练习", style="Heading 1")
         self._homework_items()

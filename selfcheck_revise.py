@@ -13,7 +13,9 @@ good = Lesson(
     key_points=["重点1", "重点2"],
     difficulties=["难点1"],
     materials=["白板", "草稿纸"],
-    homework=["作业1", "作业2"],
+    # 作业必须能在视频例题里找到出处，否则会被 _ground_homework 当编造拦掉。
+    # ex1 的题干是「若 $x>0$」，数字指纹是 {0}，所以这里的作业只能用 0 和纯文字。
+    homework=["把 x>0 这个情形再练一遍", "整理本节笔记"],
     common_mistakes=["易错1"],
     knowledge=[KnowledgePoint(
         id="kp1", title="知识点", summary="讲了什么", definition="定义",

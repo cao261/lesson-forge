@@ -24,6 +24,77 @@ _LEADIN = re.compile(r"^\s*(?:好的|好|OK|ok|输出|Output|output|Answer|answe
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
 _CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
+# ------------------------------------------------------------------ 元信息（视频分析口吻）
+# 教案的读者是**看过视频的老师本人**，不是要了解视频制作过程的人。
+# 提示词已经禁止模型写这些，但提示词只是"请求"——这里再加一道确定性防线。
+#
+# 判据刻意保守：整句命中才丢。宁可漏掉一句元信息，也不要把正文误伤。
+# 全部用非捕获组，避免 findall 返回元组。
+_VIDEO_TS = re.compile(r"\d{1,2}:\d{2}(?::\d{2})?")          # 02:45 / 00:01:25
+_META = re.compile(
+    r"(?:视频位置|视频\s*\d|视频第|视频里|视频中|老师原话|老师说"
+    r"|老师讲的?是|口述|未获取到|截图未获取|截图文件不存在|文件不存在"
+    r"|题干未转写|转写失败|板书(?:截图)?缺失|这不是一道题|未找到可用的题目画面"
+    r"|statement_latex|statement_plain|formula_latex|source_quote|teaching_notes"
+    r"|shot_confidence|difficulties|key_points|pitfalls|\bsolution\b|\banswer\b"
+    r"|knowledge\[\d+\]|examples\[\d+\]"
+    r"|\bkp\d+\b|教师自编|本节课|本课"
+    # 生成流水线自述。审核员常在总结末尾交代「回炉 1 轮后事实错误没有减少（28 → 31），
+    # 已停止自动修订」——这是给写程序的人看的，老师只关心自己的教案哪里要改。
+    r"|回炉|自动修订|事实错误没有减少|交叉审核|停止回炉)", re.I)
+
+# 指向视频位置的秒数区间。必须挨着"视频"才算元信息——
+# "先让学生独立想 10~20 秒"是教学建议，不能删。
+_VIDEO_SPAN_NEAR = re.compile(
+    r"(?:视频|片段|画面)[^\n]{0,8}?\d+\s*[–—\-~至到]\s*\d+\s*秒"
+    r"|\d+\s*[–—\-~至到]\s*\d+\s*秒[^\n]{0,4}?(?:处|片段|画面|视频)")
+
+# 句末标点：中文分号也算一句的结束（模型爱在一句里塞两件事）
+_SENT_SPLIT = re.compile(r"(?<=[。！？；;])")
+
+
+def _strip_meta_sentences(text: str) -> str:
+    """丢掉整句都在讲"视频/系统/字段"的句子。
+
+    为什么按句丢而不是按词替换：这类句子往往是「视频 02:45 段老师并未给出
+    一道带数字的例题，而是……」，把时间戳抠掉会剩下一句没有主干的残句，
+    读起来比整句删掉更糟。整句丢最干净。
+    """
+    if not text:
+        return text
+    kept = [s for s in _SENT_SPLIT.split(text)
+            if s and not _META.search(s) and not _VIDEO_TS.search(s)
+            and not _VIDEO_SPAN_NEAR.search(s)]
+    return "".join(kept).strip()
+
+
+# 一句话里去掉标点后还剩多少实词。少于这个数就当残句丢掉。
+_RESIDUE_MIN = 4
+
+
+def strip_meta_prose(text: str, min_chars: int = _RESIDUE_MIN) -> str:
+    """逐句清洗 + 逐句丢弃残渣 + 重新拼回一整段。
+
+    ``_strip_meta_sentences`` 只管「整句都是元信息就丢」，可审核总结这类文本
+    常混着两种句子：一句正经话 + 一句被时间戳掏空后只剩「（）」这种标点的碎片。
+    拼起来输出就会在段尾冒出一行孤零零的「）」。所以这里对每一句单独判空，
+    碎句直接不参与拼接。
+    """
+    if not text:
+        return ""
+    kept: list[str] = []
+    for sentence in _SENT_SPLIT.split(text):
+        if not sentence or not sentence.strip():
+            continue
+        piece = _strip_meta_sentences(sentence)
+        if not piece:
+            continue
+        solid = re.sub(r"[\s\W_]+", "", piece)
+        if len(solid) < min_chars:
+            continue
+        kept.append(piece)
+    return "".join(kept).strip()
+
 
 def _balance_dollars(text: str) -> str:
     """$ 定界符不成对时处理掉落单的那个。
@@ -83,8 +154,21 @@ def clean(text: str) -> str:
 
 def clean_block(text: str) -> str:
     """清洗一个多行块（解析步骤、讲解备注）。"""
-    out = clean(text)
+    out = _strip_meta_sentences(clean(text))
     return re.sub(r"\n{3,}", "\n\n", out).strip()
+
+
+def meta_markers(text: str) -> list[str]:
+    """体检用：这段文本里还残留哪几类元信息，干净则返回空列表。"""
+    bad: list[str] = []
+    if _VIDEO_TS.search(text):
+        bad.append("时间戳")
+    if _VIDEO_SPAN_NEAR.search(text):
+        bad.append("视频秒数区间")
+    hits = set(_META.findall(text))
+    if hits:
+        bad.append("视频分析口吻:" + "/".join(sorted(hits)[:3]))
+    return bad
 
 
 def looks_dirty(text: str) -> list[str]:

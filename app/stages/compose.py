@@ -332,6 +332,39 @@ def _ground_homework(items: list[str], knowledge: list[KnowledgePoint]) -> list[
     return kept
 
 
+# 判断题。题干里出现这些说法，说明它是一道「对不对」的抢答题——
+# 老师当场只给一个是非结论，不可能有推导过程。
+_JUDGE_STMT = re.compile(
+    r"对不对|对吗|是否正确|是否成立|正确吗|成立吗|真或假|对错|判断正误")
+
+
+def _trim_invented_solutions(lesson: Lesson, knowledge: list[KnowledgePoint]) -> int:
+    """判断题不许带多步「规范解法」——那一定是模型编的。
+
+    实测故障：视频里老师抛出一道抢答题「斜率相等的两条直线，倾斜角一定相等，
+    对不对呢？」，随口判了个「正确」。模型却给它写了五步完整数学推导，
+    其中还夹着「tanα 在 α≠90° 时单调」这种并不严谨的说法。老师拿进课堂，
+    学生照着记下来，错的不是教案而是老师的板书。
+
+    判据只看题干本身：出现「对不对/是否正确/判断」这类说法就是判断题。
+    一句话的说明不是推导，留着；多步的一律当编造处理。
+    宁可让排版器写出「视频中主要为教师口头点拨」，也不能编。
+    """
+    dropped = 0
+    for kp in knowledge or []:
+        for ex in kp.examples:
+            if not ex.is_exercise:
+                continue
+            stmt = ex.statement_latex or ex.statement_plain or ""
+            if not stmt or not _JUDGE_STMT.search(stmt):
+                continue
+            steps = [s for s in (ex.solution or []) if str(s or "").strip()]
+            if len(steps) > 1:
+                ex.solution = []
+                dropped += 1
+    return dropped
+
+
 def _to_lesson(
     data: dict,
     meta: LessonMeta,
@@ -557,6 +590,8 @@ def _to_lesson(
         lesson.materials = _append_material(
             lesson.materials,
             "视频中老师未布置课后作业，也没有可直接复用的题目，故本教案不列作业。")
+
+    _trim_invented_solutions(lesson, merged)
 
     lesson.stats = {
         "knowledge_count": len(merged),

@@ -16,7 +16,7 @@ from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from app.docx.omml import latex_to_image, latex_to_omml, split_lines, split_math
-from app.docx.sanitize import clean, clean_block
+from app.docx.sanitize import _strip_meta_sentences, clean, clean_block, strip_meta_prose
 from app.models import Lesson, fmt_ts
 
 BODY_FONT = "宋体"
@@ -34,6 +34,16 @@ MAX_PPI = 110.0
 # 截图文件名。shot 字段是模型参与写出来的，偶尔会把提示词里的占位说明
 # （「（未获取到）」这类）当成文件名存进来，字段非空但根本没有对应的图。
 _SHOT_NAME = re.compile(r"^[\w.\-]+\.(?:jpg|jpeg|png|webp)$", re.IGNORECASE)
+
+# 编造风险是模型给的英文枚举值。直接印在纸上就是一行「编造风险评估：medium」，
+# 老师看不懂也没法据此行动，翻译成人话。
+_RISK_CN = {
+    "low": "低",
+    "medium": "中",
+    "high": "高",
+    "none": "无",
+    "unknown": "未评估",
+}
 
 MATH_PARA_HEAD = '<m:oMathPara xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>'
 
@@ -107,14 +117,15 @@ class DocxBuilder:
 
     # ------------------------------------------------------------------ 基础工具
     def _p(self, text: str = "", style: str | None = None, align=None, size: float | None = None,
-           bold: bool = False, color: RGBColor | None = None, indent: float | None = None):
+           bold: bool = False, color: RGBColor | None = None, indent: float | None = None,
+           trusted: bool = False):
         para = self.doc.add_paragraph(style=style)
         if align is not None:
             para.alignment = align
         if indent is not None:
             para.paragraph_format.left_indent = Inches(indent)
         if text:
-            self.add_rich(para, text, size=size, bold=bold, color=color)
+            self.add_rich(para, text, size=size, bold=bold, color=color, trusted=trusted)
         return para
 
     def _bullet(self, text: str, level: int = 0):
@@ -208,8 +219,18 @@ class DocxBuilder:
 
     # ------------------------------------------------------------------ 混排 + 公式
     def add_rich(self, para, text: str, size: float | None = None, bold: bool = False,
-                 color: RGBColor | None = None):
-        """把含 $...$ / $$...$$ 的文本写进段落，公式转成 Word 公式对象。"""
+                 color: RGBColor | None = None, trusted: bool = False):
+        """把含 $...$ / $$...$$ 的文本写进段落，公式转成 Word 公式对象。
+
+        ``trusted=True`` 表示这段字是排版器自己写死的固定文案，不是模型产出的。
+        净化层只针对模型文本——像「▸ 提示：视频中主要为教师口头点拨…」这种
+        提示语是**必须出现**的说明，被当成视频分析口吻清掉反而是缺陷。
+        """
+        # 元信息净化放在这里而不是只放在 _c()：_p/_bullet 会把原文直接递进来，
+        # 有些调用点没走 _c。放在唯一出口，一次收口，谁都绕不过去。
+        # 幂等——已经洗干净的文本再洗一遍不会变。
+        if not trusted:
+            text = _strip_meta_sentences(text)
         if not text:
             return
         for kind, body, _raw in split_math(text):
@@ -635,39 +656,12 @@ class DocxBuilder:
                 for ex in kp.examples:
                     if ex.is_exercise:
                         self._render_example_teacher(ex)
-                    else:
-                        self._render_talk_teacher(ex)
-
-    def _render_talk_teacher(self, ex: Example) -> None:
-        """老师口述讲解、并没有出可做的题。
-
-        以前这种条目跟真例题混在一起渲染，结果就是一段「针对典例」下面
-        空着题干、挂着空白答题区——老师看着也莫名其妙。单独标出来，
-        既保留了他要知道"这一段讲了什么"，又不会误导成"这里有道题"。
-        """
-        head_p = self._p(style="Heading 3")
-        r = head_p.add_run(f"▸ 口述讲解 · {self._c(ex.title)}")
-        r.bold = True
-
-        for label, body in (("视频位置", f"{ex.ts_start:.0f}–{ex.ts_end:.0f}s"),
-                            ("老师讲法", ex.notes or ex.solution and ex.solution[0] or "")):
-            if not body:
-                continue
-            para = self._p(indent=0.2)
-            lr = para.add_run(f"{label}：")
-            lr.bold = True
-            lr.font.size = Pt(9.5)
-            lr.font.name = LATIN_FONT
-            self.add_rich(para, self._c(str(body)))
-            para.paragraph_format.space_after = Pt(2)
-
-        tip = self._p(indent=0.2)
-        tr = tip.add_run("视频里老师没有出可做的题，这段属于口头讲解；"
-                         "要练手的话请老师自行补充一道针对性练习。")
-        tr.font.size = Pt(8.5)
-        tr.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
-        tr.font.name = LATIN_FONT
-        tip.paragraph_format.space_after = Pt(6)
+                    # 不是题的条目（老师只是口述讲解）不单独成块。
+                    # 以前会给它渲染一个「▸ 口述讲解」，里面全是
+                    # 「视频位置 0–37s」「老师说……」这类视频分析口吻，
+                    # 老师看过视频，根本不需要这些；而且它讲的内容
+                    # 本来就已经在上面的【核心概念】【教学重点】里说过了，
+                    # 整块是重复 + 噪音。直接不渲染。
 
     def _render_example_teacher(self, ex: Example) -> None:
         """教师版典例精析：排版紧凑美观、讲练针对性强。"""
@@ -734,7 +728,7 @@ class DocxBuilder:
                 self.add_rich(para, step)
         else:
             self._p("▸ 提示：视频中主要为教师口头点拨与引导分析，建议引导学生在草稿本上独立推导演算。",
-                    size=9, color=RGBColor(0x88, 0x88, 0x88), indent=0.2)
+                    size=9, color=RGBColor(0x88, 0x88, 0x88), indent=0.2, trusted=True)
 
         # 6. 名师点拨与解题通法
         if ex.notes:
@@ -805,77 +799,254 @@ class DocxBuilder:
 
     def _review(self) -> None:
         r = self.lesson.review
+
+        # 审核附录里的文字一律先翻译字段名再净化。
+        # 顺序很关键：先净化的话，带 examples 的整句会被丢掉，
+        # 而那句话本身往往是有价值的判断。
+        def _rev(text: str) -> str:
+            return strip_meta_prose(_say_field_words(text))
+
         self._p("附、教案审核与备课说明", style="Heading 1")
+        # 下面两行是排版器自己写的固定文案（含"回炉""交叉审核"），
+        # 必须走 trusted 旁路，否则会被净化层当成流水线自述清掉。
         # 模型交叉审核没跑成时，不能拿"规则体检通过"冒充"审核通过"
         if r.model_review_ok:
             verdict_cn = {"pass": "✅ 通过", "revise": "⚠ 已修订，仍建议人工复核", "fail": "❌ 未通过"}.get(
                 r.verdict, r.verdict
             )
-            self._p(f"审核结论：{verdict_cn}　|　得分：{r.score:.0f}　|　回炉轮数：{r.rounds}")
+            self._p(f"审核结论：{verdict_cn}　|　得分：{r.score:.0f}　|　回炉轮数：{r.rounds}",
+                    trusted=True)
         else:
             self._p(
                 "审核结论：⚠ 模型交叉审核未完成，仅通过本地规则体检",
-                bold=True,
+                bold=True, trusted=True,
             )
             self._p(
                 f"本地规则体检：{'通过' if r.verdict == 'pass' else '未通过'}"
                 f"　|　模型得分：未产生　|　回炉轮数：{r.rounds}",
-                size=10,
+                size=10, trusted=True,
             )
         if r.hallucination_risk:
-            self._p(f"编造风险评估：{r.hallucination_risk}")
+            hr = _rev(r.hallucination_risk)
+            if hr:
+                # 模型偶尔直接吐枚举值，印在纸上就是一行「编造风险评估：medium」
+                self._p(f"编造风险评估：{_RISK_CN.get(hr.strip().lower(), hr)}", trusted=True)
         if r.summary:
-            self._p(f"审核意见：{r.summary}")
+            # 审核总结是长句，净化后可能只剩标点残渣，逐句判空后再拼
+            sm = _rev(r.summary)
+            if sm:
+                self._p(f"审核意见：{sm}")
         if r.rule_checks:
-            self._p("规则体检：", size=10.5, bold=True)
-            for item in r.rule_checks:
-                self._bullet(item)
+            # 三条清理：
+            # 1) 只留人话。体检里那些「[ex1] 截图文件不存在：（未获取到）」
+            #    是系统的内部状态，老师看到只会困惑。
+            # 2) 丢掉针对已降级例题的条目——它们已经不是例题了。
+            # 3) 净化后只剩标点残渣的整条丢弃。
+            _drop = {e.id.lower() for kp in self.lesson.knowledge
+                     for e in kp.examples if not e.is_exercise}
+            checks = []
+            for raw in r.rule_checks:
+                s = _rev(raw)
+                if not s:
+                    continue
+                if _drop:
+                    ids = re.findall(r"\bex\d+\b", s, re.I)
+                    if ids and all(i.lower() in _drop for i in ids):
+                        continue
+                checks.append(s)
+            if checks:
+                self._p("规则体检：", size=10.5, bold=True)
+                for item in checks:
+                    self._bullet(item)
         if r.issues:
+            # 审核跑完之后，例题甄别可能又把几条降级成了口述要点。
+            # 这时"ex1 题干为空""ex1 截图未确认"这类意见已经过时了——
+            # 它已经不是例题了，还照抄只会让老师白紧张。
+            dropped = {e.id.lower() for kp in self.lesson.knowledge
+                       for e in kp.examples if not e.is_exercise}
+            issues = r.issues
+            if dropped:
+                def _stale(issue) -> bool:
+                    ids = re.findall(r"\bex\d+\b", f"{issue.target} {issue.problem}", re.I)
+                    return bool(ids) and all(i.lower() in dropped for i in ids)
+                issues = [i for i in r.issues if not _stale(i)]
+            if len(issues) != len(r.issues):
+                self._p(
+                    f"（另有 {len(r.issues) - len(issues)} 条意见针对的是老师口头讲解的段落，"
+                    f"这些段落不是例题，已从清单中移除。）", size=9,
+                    color=RGBColor(0x99, 0x99, 0x99), trusted=True,
+                )
             # 事实错误和教学补充分开列。混在一起的话，老师会以为口诀、作业
             # 也是错误，白紧张一场——这两类的性质根本不同。
-            facts = [i for i in r.issues if i.kind != "supplement"]
-            supps = [i for i in r.issues if i.kind == "supplement"]
+            facts = [i for i in issues if i.kind != "supplement"]
+            supps = [i for i in issues if i.kind == "supplement"]
 
-            def _issue_block(issue, mark: str) -> None:
+            # 正文同样走净化层：审核员的措辞里也会冒出
+            # teaching_notes 这类字段名和"视频 05:52 段"这类时间戳。
+            def _issue_body(issue) -> tuple[str, str]:
+                body = _rev(f"{_human_target(issue.target)} {issue.problem}".strip())
+                sug = _rev(issue.suggestion) if issue.suggestion else ""
+                # 正文被净化光了就整条丢掉。留一个光秃秃的「🟠」在纸上，
+                # 老师只会以为教案缺了内容。
+                return (body, sug) if body else ("", "")
+
+            def _print_issue(issue, mark: str) -> None:
+                body, sug = _issue_body(issue)
+                if not body:
+                    return
                 para = self.doc.add_paragraph()
                 para.paragraph_format.left_indent = Inches(0.28)
-                run = para.add_run(f"{mark} [{issue.target or '整体'}] {issue.problem}")
+                run = para.add_run(f"{mark} {body}")
                 run.font.size = Pt(9.5)
                 run.font.name = LATIN_FONT
                 run._element.rPr.rFonts.set(qn("w:eastAsia"), BODY_FONT)
-                if issue.suggestion:
+                if sug:
                     sub = self.doc.add_paragraph()
                     sub.paragraph_format.left_indent = Inches(0.5)
-                    run2 = sub.add_run(f"→ {issue.suggestion}")
+                    run2 = sub.add_run(f"→ {sug}")
                     run2.font.size = Pt(9)
                     run2.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
                     run2.font.name = LATIN_FONT
                     run2._element.rPr.rFonts.set(qn("w:eastAsia"), BODY_FONT)
 
-            if facts:
-                self._p(f"需要核对的地方（{len(facts)} 条）：", size=10.5, bold=True)
-                for issue in facts:
-                    _issue_block(issue, {"blocker": "🔴", "major": "🟠", "minor": "🟡"}[issue.severity])
-            if supps:
-                self._p(
-                    f"补充建议（{len(supps)} 条，非错误，视频里没讲但老师通常会自己补）：",
-                    size=10.5, bold=True,
-                )
-                for issue in supps:
-                    _issue_block(issue, "📝")
-        if r.teacher_notes:
-            self._p(f"▸ 审核老师提醒：{r.teacher_notes}")
+            # 先算出真正印得出来的条数，再写标题。
+            # 否则标题写着「4 条」下面只列出 1 条——老师会以为漏印了三条。
+            # 同一处笔误被分批评审报了两遍，在这里合并：
+            # 老师看到同一条错两遍，只会觉得这份审核很水。
+            _MARK = {"blocker": "🔴", "major": "🟠", "minor": "🟡"}
 
+            def _rows(items):
+                seen: dict[str, tuple] = {}
+                for issue in items:
+                    body, sug = _issue_body(issue)
+                    if not body:
+                        continue
+                    key = re.sub(r"[\s\W_]+", "", body)[:60]
+                    if key in seen:
+                        prev = seen[key]
+                        # 保留有建议的那一份，理由比光秃秃的报错有用
+                        if sug and not prev[1]:
+                            seen[key] = (issue, sug)
+                        continue
+                    seen[key] = (issue, sug)
+                return list(seen.values())
+
+            fact_rows = _rows(facts)
+            supp_rows = _rows(supps)
+
+            if fact_rows:
+                self._p(f"需要核对的地方（{len(fact_rows)} 条）：", size=10.5, bold=True, trusted=True)
+                for issue, _s in fact_rows:
+                    _print_issue(issue, _MARK.get(issue.severity, "🟡"))
+            if supp_rows:
+                self._p(
+                    f"补充建议（{len(supp_rows)} 条，非错误，视频里没讲但老师通常会自己补）：",
+                    size=10.5, bold=True, trusted=True,
+                )
+                for issue, _b in supp_rows:
+                    _print_issue(issue, "📝")
+        if r.teacher_notes:
+            tn = _rev(r.teacher_notes)
+            if tn:
+                self._p(f"▸ 审核老师提醒：{tn}")
+
+    # 内部字段路径 → 人话。
+    # 审核员回报的是 knowledge[2].examples[1].solution（ex8）这种机器路径，
+    # 直接印在教案上，老师既看不懂也用不上。
     def _footer_note(self) -> None:
-        meta = self.lesson.meta
-        self.doc.add_paragraph()
-        note = self._p(
-            f"本教案由 {meta.generator} 从视频《{meta.source_title}》自动生成，"
-            f"知识点与例题均可回溯到原视频时间戳（{meta.source_url}）。"
-            "公式为 Word 原生公式对象，可直接编辑；请在上课前按学生实际情况微调。",
-            size=8.5, color=RGBColor(0x99, 0x99, 0x99),
-        )
-        note.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            meta = self.lesson.meta
+            self.doc.add_paragraph()
+            note = self._p(
+                f"本教案由 {meta.generator} 从视频《{meta.source_title}》自动生成，"
+                f"知识点与例题均可回溯到原视频时间戳（{meta.source_url}）。"
+                "公式为 Word 原生公式对象，可直接编辑；请在上课前按学生实际情况微调。",
+                size=8.5, color=RGBColor(0x99, 0x99, 0x99),
+            )
+            note.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+
+# 内部字段路径 → 人话。审核员回报的是 knowledge[2].examples[1].solution（ex8）
+# 这种机器路径，直接印在教案上，老师既看不懂也用不上。
+_FIELD_CN = [
+    ("statement_latex", "题干"), ("statement_plain", "题干文字"),
+    ("solution", "解析步骤"), ("answer", "参考答案"),
+    ("formula_latex", "公式"), ("definition", "概念定义"),
+    ("teaching_notes", "备课点拨"), ("key_points", "要点"),
+    ("pitfalls", "易错点"), ("source_quote", "原文引用"),
+    ("homework", "课后作业"), ("objectives", "教学目标"),
+    ("summary", "内容摘要"), ("title", "标题"),
+    ("difficulties", "难点"), ("knowledge", "知识点"),
+    ("examples", "例题"),
+]
+_BARE_FIELD_RX = re.compile(
+    r"^([a-z_]+)\[(\d+)\]\s*$", re.I)
+_TARGET_RX = re.compile(
+    r"(?:knowledge|examples)\[\d+\]|knowledge\[\d+\]\.examples\[\d+\]"
+    r"|\.examples\[\d+\]")
+
+
+def _human_target(raw: str) -> str:
+    """把 knowledge[2].examples[1].solution（ex8）变成「ex8 · 解析步骤」。"""
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    # 模型有时不写全路径，只写「difficulties[2]」。补成"难点 · 第 3 项"，
+    # 不然印在纸上就是一个老师看不懂的下标。
+    bare = _BARE_FIELD_RX.match(s)
+    if bare:
+        cn = dict(_FIELD_CN).get(bare.group(1), bare.group(1))
+        idx = int(bare.group(2))
+        return f"{cn} · 第 {idx + 1} 项"
+    # 已经是人话了（例如 "[ex1]"），原样返回，别再套一层括号
+    if not re.search(r"(?:knowledge|examples)\[\d+\]", s):
+        return s
+    m = re.search(r"[(（]\s*((?:ex|kp)\d+)\s*[)）]", s)
+    who = m.group(1) if m else ""
+    tail = _TARGET_RX.sub("", s)
+    for key, cn in _FIELD_CN:
+        if key in tail:
+            tail = cn
+            break
+    else:
+        tail = tail.strip(" .·")
+    if who and tail and who in tail:
+        tail = tail.replace(who, "").strip(" .·")
+    if who and tail:
+        return f"{who} · {tail}"
+    return who or tail
+
+
+# 审核员行文里直接用英文字段名指代内容：「examples 部分诚实地标注为…」。
+# 整句删掉太浪费（那句话本身是有用的判断），翻译成中文才对。
+# 只在审核附录里调用——正文是数学内容，理论上不该出现这些词，
+# 真出现了宁可让净化层整句删掉，也不要擅自替换。
+_FIELD_WORD_RX = re.compile(
+    r"\s*\b(examples?|knowledge|definition|summary|key_points|pitfalls"
+    r"|difficulties|objectives|materials|homework|solution|answer"
+    r"|teaching_notes|statement_latex|statement_plain|formula_latex"
+    r"|source_quote|shot_confidence|verified|is_exercise)\b\s*", re.I)
+_FIELD_WORD_CN = {
+    "examples": "例题", "example": "例题", "knowledge": "知识点",
+    "definition": "概念定义", "summary": "内容摘要", "key_points": "要点",
+    "pitfalls": "易错点", "difficulties": "难点", "objectives": "教学目标",
+    "materials": "教具", "homework": "课后作业", "solution": "解析步骤",
+    "answer": "参考答案", "teaching_notes": "备课点拨",
+    "statement_latex": "题干", "statement_plain": "题干文字",
+    "formula_latex": "公式", "source_quote": "原文引用",
+    "shot_confidence": "截图可信度", "verified": "已核实",
+    "is_exercise": "是否为例题",
+}
+
+
+def _say_field_words(text: str) -> str:
+    """把审核员行文里的英文字段名换成中文。
+
+    模型写「的 解析步骤 应为空」，把字段名换成中文后前后会剩两个空格，
+    印在纸上就是「的解析步骤  应为空」。所以匹配时连着两边的空白一起吃掉。
+    不做"事后把汉字之间的空格全删掉"——那会连「难点 · 第 3 项 两点斜率公式」
+    这种正常分隔也一起吃掉。
+    """
+    return _FIELD_WORD_RX.sub(lambda m: _FIELD_WORD_CN[m.group(1).lower()], text or "")
 
 
 def _set_cell(cell, text: str, bold: bool = False, shade: str | None = None) -> None:

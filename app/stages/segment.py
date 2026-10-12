@@ -72,6 +72,7 @@ def segment(
         title=meta.title or "未知",
         uploader=meta.uploader or "未知",
         duration=_hms(duration),
+        duration_sec=f"{duration:.1f}",
         transcript=transcript,
     )
     if extra:
@@ -152,24 +153,69 @@ def segment(
 
 
 def _normalize(kps: list[KnowledgePoint], duration: float) -> list[KnowledgePoint]:
-    """修时间轴：夹紧到视频时长、排好序、补连续的洞、去掉空板块。"""
+    """修时间轴：夹紧到视频时长、排好序、切开重叠、补上空洞、拖到片尾。
+
+    这一段以前有两个真 bug，都是"看起来在修、其实越修越坏"：
+
+    1) 重叠修补的循环写的是 `if kp.ts_end > ...`，而 `kp` 是上一个
+       `for i, kp in enumerate(kps)` 循环泄漏出来的变量，永远等于**最后一个**
+       知识点。结果中间的知识点从来没被切开过（a 0-100 和 b 50-200 原样保留），
+       反倒是最后一个被反复砍到 1 秒（c 结束于 300 → 变成 181）。
+    2) 只夹紧、不补覆盖。提示词里"最后一个板块到达视频结尾"这种话靠不住，
+       模型经常只切出视频的前一半。实测 360 秒的视频只切出 0-178.5 秒，
+       老师 317-358 秒的抢答题整段落在覆盖之外——没有知识点、没有例题、
+       没有截图，那道题在教案里彻底消失，日志上还看不出少了什么。
+    """
     kps = [kp for kp in kps if kp.title or kp.summary]
     if not kps:
         return kps
     kps.sort(key=lambda k: k.ts_start)
+
+    # 1) 夹紧到 [0, duration]，零长/倒挂的板块先撑开
     for i, kp in enumerate(kps):
         kp.ts_start = max(0.0, min(kp.ts_start, duration))
         kp.ts_end = max(0.0, min(kp.ts_end or duration, duration))
         if kp.ts_end <= kp.ts_start:
             nxt = kps[i + 1].ts_start if i + 1 < len(kps) else duration
-            kp.ts_end = max(kp.ts_start + 30.0, min(nxt, duration))
-    # 修补重叠：上一个板块的结束不能压过下一个的开始
+            kp.ts_end = min(duration, max(kp.ts_start, nxt))
+            if kp.ts_end <= kp.ts_start:
+                kp.ts_end = min(duration, kp.ts_start + 1.0)
+
+    # 2) 切开重叠：后一块的开始就是前一块的结束
+    #    这里必须用 kps[i]。写成 kp 会拿到上一个循环泄漏出来的最后一个元素。
     for i in range(len(kps) - 1):
-        if kps[i].ts_end > kps[i + 1].ts_start:
-            kp.ts_end = kps[i + 1].ts_start
-        if kp.ts_end <= kp.ts_start:
-            kp.ts_end = kp.ts_start + 1.0
+        a, b = kps[i], kps[i + 1]
+        if a.ts_end > b.ts_start:
+            a.ts_end = b.ts_start
+        if a.ts_end <= a.ts_start:
+            a.ts_end = min(duration, max(a.ts_start + 1.0, b.ts_start))
+
+    # 3) 补空洞：中间没被任何板块覆盖的时间归前一块
+    for i in range(len(kps) - 1):
+        a, b = kps[i], kps[i + 1]
+        if a.ts_end < b.ts_start:
+            a.ts_end = b.ts_start
+
+    # 4) 拖到片尾：最后一个板块一直盖到视频结束
+    if duration > 0 and kps[-1].ts_end < duration:
+        kps[-1].ts_end = duration
     return kps
+
+
+def coverage_note(kps: list[KnowledgePoint], duration: float) -> str | None:
+    """切分没盖住整段视频时给一句人话提醒；盖满了返回 None。"""
+    if duration <= 0 or not kps:
+        return None
+    lo = min(kp.ts_start for kp in kps)
+    hi = max(kp.ts_end for kp in kps)
+    covered = sum(max(0.0, kp.ts_end - kp.ts_start) for kp in kps)
+    ratio = covered / (hi - lo) if hi > lo else 0.0
+    if lo <= 1.0 and hi >= duration - 1.0 and ratio >= 0.97:
+        return None
+    return (
+        f"切分只覆盖了 {ratio:.0%} 的视频（{lo:.0f}-{hi:.0f}s / 全片 {duration:.0f}s）。"
+        f"没覆盖到的部分不会被抽帧、也不会出例题，请确认老师是不是在片尾出了题。"
+    )
 
 
 def save(kps: list[KnowledgePoint], path: Path, extra: dict | None = None) -> None:

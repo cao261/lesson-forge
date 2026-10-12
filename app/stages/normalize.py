@@ -164,13 +164,40 @@ def normalize_kps(kps: list[KnowledgePoint], duration: float = 0.0) -> list[str]
     """就地修结构问题，返回给日志看的人话清单。"""
     notes: list[str] = []
 
+    # ---- 0. 例题归位 ----
+    # 模型常把例题放在所属知识点的**后面**：老师先讲概念，紧接着出题，
+    # 模型就给例子标了一个刚好落在下一块起点上的时间。实测 kp1 0-37.5 秒，
+    # 例题 37.5-38.5 秒——正好在 kp1 之外。硬裁只会把例题时间窗压成一个点
+    # （旧代码裁出 38-38），字幕上下文和截图锚点全废。
+    # 这里先把这样的例题还给真正覆盖它的那块知识点，再谈裁剪。
+    for kp in kps:
+        for ex in list(kp.examples):
+            if not (kp.ts_end > kp.ts_start and ex.ts_start >= kp.ts_end):
+                continue
+            owner = next((o for o in kps
+                          if o is not kp and o.ts_start <= ex.ts_start < o.ts_end), None)
+            if owner is None:
+                continue
+            kp.examples.remove(ex)
+            owner.examples.append(ex)
+            notes.append(
+                f"[{ex.id}] 例题时间落在 {kp.id} 之外（{ex.ts_start:.0f}s），已归到 {owner.id}"
+            )
+
     for kp in kps:
         # ---- 1. 例题时间裁进知识点范围内 ----
         for ex in kp.examples:
             before = (ex.ts_start, ex.ts_end)
             if kp.ts_end > kp.ts_start:
                 ex.ts_start = max(ex.ts_start, kp.ts_start)
-                ex.ts_end = min(ex.ts_end, kp.ts_end) if ex.ts_end > ex.ts_start else ex.ts_start + 1.0
+                ex.ts_end = min(ex.ts_end, kp.ts_end)
+                if ex.ts_end <= ex.ts_start:
+                    # 守卫必须比的是**裁完**的 end 和 start。原来的写法拿裁之前的
+                    # ex.ts_end 去比裁之后的 ex.ts_start，例题本来是长的就会绕过守卫，
+                    # 裁出一个 ts_end < ts_start 的倒挂区间（实测 38-158 → 38-38）。
+                    # 这里允许略微越过知识点边界：宁可多给一秒字幕上下文，
+                    # 也不能给出一个零长的时间窗——那会让看图转写拿不到任何上下文。
+                    ex.ts_end = ex.ts_start + 1.0
             if duration > 0 and ex.ts_end > duration:
                 ex.ts_end = max(ex.ts_start + 1.0, duration)
             if (ex.ts_start, ex.ts_end) != before:

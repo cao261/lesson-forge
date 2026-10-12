@@ -75,7 +75,14 @@ def rule_check(
     if not lesson.flow:
         problems.append("缺少课堂流程")
     if not lesson.homework:
-        problems.append("缺少课后作业")
+        # 作业为空是**设计如此**，不是缺陷：视频里老师没布置作业，而我们还有一道
+        # 防编造闸门，模型自己出的题一律毙掉（数字指纹对不上原题就是编造）。
+        # 以前照实报成"缺少课后作业"，于是每一份教案都必然 fail——
+        # 这条规则本身就和防编造闸门互相打架，把判定锁死在过不了关。
+        # 视频里确实讲过作业、只是没转写成题目时，才是真问题，那由模型审出来。
+        if transcript_norm and re.search(r"作业|课后(练习|题)|回家做|布置",
+                                         transcript_norm):
+            problems.append("缺少课后作业")
 
     for kp in lesson.knowledge:
         if not kp.summary:

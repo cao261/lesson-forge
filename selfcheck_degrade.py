@@ -164,6 +164,47 @@ check("没有降级条目时不动任何意见", _drop_stale_issues(mixed.review
 empty = Lesson(meta=LessonMeta(title="t"), knowledge=[])
 check("没有知识点时安全", _drop_stale_issues(empty.review, empty) == 0)
 
+# ---------------------------------------------------------------- 空作业不算缺陷
+# 作业为空是**设计如此**：视频里老师没布置作业，而我们有防编造闸门，
+# 模型自己出的题一律毙掉。以前照实报成"缺少课后作业"，于是每一份教案都必然
+# fail——这条规则和防编造闸门互相打架，把判定锁死在过不了关。
+from app.models import Cue
+from app.stages.review import rule_check
+
+
+def _hw_lesson(transcript: str, homework: list[str]):
+    L = Lesson(
+        meta=LessonMeta(title="t", video_duration=60.0),
+        objectives=["目标一", "目标二", "目标三"],
+        key_points=["重点"], difficulties=["难点"], materials=["粉笔"],
+        common_mistakes=["易错"], flow=[{"stage": "导入", "minutes": 5}],
+        homework=homework,
+        knowledge=[KnowledgePoint(id="kp1", title="考点", summary="概述",
+                                  key_points=["要点"], ts_start=0.0, ts_end=60.0,
+                                  examples=[Example(id="ex1", title="题",
+                                                    statement_plain="题面",
+                                                    verified=True,
+                                                    is_exercise=True)])],
+    )
+    cues = [Cue(start=i * 2.0, end=i * 2.0 + 2.0, text=t)
+            for i, t in enumerate(transcript.split("。") if transcript else [])]
+    return L, cues
+
+
+_CLEAN = "今天讲倾斜角的定义。范围是零到π。斜率等于正切值。"
+_a, _ca = _hw_lesson(_CLEAN, [])
+check("视频里没布置作业 -> 空作业不算缺陷",
+      not [x for x in rule_check(_a, Path("shots"), 60.0, _ca) if "课后作业" in x])
+_b, _cb = _hw_lesson(_CLEAN + "。最后布置一下课后作业，课本第 52 页。", [])
+check("视频里真布置了作业却没列 -> 仍然是缺陷",
+      any("课后作业" in x for x in rule_check(_b, Path("shots"), 60.0, _cb)))
+_c, _cc = _hw_lesson(_CLEAN, ["1. 完成课本练习"])
+check("本来就列了作业 -> 不报",
+      not [x for x in rule_check(_c, Path("shots"), 60.0, _cc) if "课后作业" in x])
+_d, _cd = _hw_lesson("", [])
+check("没有字幕时的空作业也安全",
+      not [x for x in rule_check(_d, Path("shots"), 60.0, _cd) if "课后作业" in x])
+
 print()
 if fails:
     print(f"❌ {len(fails)} 项不通过：" + "、".join(fails[:6]))

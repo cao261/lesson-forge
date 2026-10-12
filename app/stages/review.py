@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.config import SETTINGS
-from app.llm.client import MiniMaxClient
+from app.llm.client import LLMError, MiniMaxClient
 from app.llm.parallel import run_batches
 from app.llm.prompts import (
     REVIEW_SYSTEM,
@@ -653,7 +653,33 @@ def run_review_loop(
             break
         round_no += 1
         before_issues = len([i for i in report.issues if i.is_fact])
-        lesson, report = refine(lesson, report, cues, shots_dir, duration, round_no, progress)
+        # 回炉是"锦上添花"，不是"不做就没有产出"的环节。
+        # 实测：review-global 遇到一次连接中断（peer closed connection），
+        # 紧接着 revise 连着 5 次 WinError 10061 连接被拒，整条流水线抛异常退出，
+        # 前面十几分钟的转写、看图、教案生成全部白做——最后一份 docx 都没产出。
+        # 老师宁可要一份"没回炉过、但附录里如实列着待核对项"的教案，
+        # 也不要什么都没有。
+        try:
+            lesson, report = refine(lesson, report, cues, shots_dir, duration, round_no, progress)
+        except LLMError as exc:
+            report.rounds = round_no - 1
+            report.verdict = "revise"
+            report.summary = (
+                (report.summary + " ")
+                + f"⚠ 第 {round_no} 轮回炉修订未能完成（模型服务连接失败：{str(exc)[:60]}），"
+                f"本版未经自动修订。上方 {before_issues} 条待核对项请老师人工过一遍。"
+            ).strip()
+            lesson.review = report
+            lesson.stats.update({
+                "review_rounds": round_no - 1,
+                "review_stalled": True,
+                "review_refine_failed": True,
+                "review_verdict": report.verdict,
+                "review_score": report.score,
+            })
+            if progress:
+                progress(1.0, f"⚠ 第 {round_no} 轮回炉失败，改用未修订版本继续出稿")
+            return lesson
         report.rounds = round_no
         lesson.review = report
         if on_lesson:

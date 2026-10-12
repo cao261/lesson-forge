@@ -1,0 +1,135 @@
+# -*- coding: utf-8 -*-
+"""自检：模型服务出问题时，必须还能交出一份教案。
+
+实测故障（第 6 轮端到端）：review-global 遇到一次连接中断
+（peer closed connection without sending complete message body），
+紧接着 revise 连着 5 次 WinError 10061「目标计算机积极拒绝，无法连接」。
+异常一路抛出 run_pipeline，整条流水线中断——前面十几分钟的转写、看图、
+教案生成全部白做，最后一份 docx 都没产出。
+
+老师宁可要一份"没回炉过、但附录里如实列着待核对项"的教案，
+也不要什么都没有。这条钉的就是这件事。
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from app.llm.client import LLMError, _is_connect_error, _is_retryable
+from app.models import (Cue, Example, KnowledgePoint, Lesson, LessonMeta,
+                        ReviewIssue, ReviewReport)
+from app.stages import review as review_stage
+
+fails: list[str] = []
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    print(f"[{'OK  ' if ok else 'FAIL'}] {name}" + (f"  {detail}" if detail else ""))
+    if not ok:
+        fails.append(name)
+
+
+def make_lesson() -> Lesson:
+    return Lesson(
+        meta=LessonMeta(title="降级测试", subject="数学", grade="高一"),
+        objectives=["目标一"],
+        knowledge=[KnowledgePoint(id="kp1", title="考点一", definition="定义",
+                                  summary="概述", examples=[
+                                      Example(id="ex1", title="例题",
+                                              statement_plain="题面", answer="答案")])],
+    )
+
+
+# ---------------------------------------------------------------- 连接类错误的判定与退避档位
+CONN = [
+    ConnectionRefusedError("[WinError 10061] 由于目标计算机积极拒绝，无法连接。"),
+    ConnectionResetError("connection reset by peer"),
+    Exception("peer closed connection without sending complete message body"),
+    Exception("incomplete chunked read"),
+]
+for exc in CONN:
+    check(f"识别为连接类错误：{str(exc)[:34]}…", _is_connect_error(exc))
+
+check("普通业务错误不算连接类", not _is_connect_error(Exception("模型返回空内容")),
+      "空内容靠退避重试没用，别浪费 45 秒")
+check("过载错误不算连接类", not _is_connect_error(LLMError("[529] 服务集群负载较高")))
+check("None 安全", _is_connect_error(None) is False)
+check("连接类错误仍然可重试", _is_retryable(0, ConnectionRefusedError("10061")))
+
+# ---------------------------------------------------------------- 回炉失败必须降级出稿
+GOOD = make_lesson()
+REPORT = ReviewReport(
+    verdict="revise", score=70, rounds=0, model_review_ok=True,
+    summary="两处公式符号笔误需要修正。",
+    issues=[ReviewIssue(kind="fact", severity="major", target="ex1",
+                        problem="答案写错了", suggestion="改成正确值")],
+)
+
+calls = {"review": 0, "refine": 0}
+
+
+def fake_review(lesson, cues, shots_dir, duration, progress=None, **kw):
+    calls["review"] += 1
+    return REPORT.model_copy(deep=True)
+
+
+def fake_refine(lesson, report, cues, shots_dir, duration, round_no, progress=None, **kw):
+    calls["refine"] += 1
+    raise LLMError(
+        "MiniMax-M3/MiniMax-M3 调用失败（revise-1/3，试了 5 次）："
+        "最后一次错误：[WinError 10061] 由于目标计算机积极拒绝，无法连接。"
+    )
+
+
+saved = {"n": 0}
+
+
+def fake_on_lesson(lesson):
+    saved["n"] += 1
+
+
+review_stage.review = fake_review
+review_stage.refine = fake_refine
+
+try:
+    out = review_stage.run_review_loop(
+        GOOD, [], Path("shots"), 360.0, max_rounds=3,
+        on_lesson=fake_on_lesson,
+    )
+finally:
+    pass
+
+print(f"  回炉被调用 {calls['refine']} 次，落盘 {saved['n']} 次")
+check("回炉失败后仍然返回一份完整的 Lesson", isinstance(out, Lesson))
+check("知识点一条没少", len(out.knowledge) == 1 and out.knowledge[0].id == "kp1")
+check("例题一条没少", len(out.knowledge[0].examples) == 1)
+check("审核意见仍然挂在教案上", len(out.review.issues) == 1)
+check("结论降级为需人工复核", out.review.verdict == "revise", out.review.verdict)
+check("如实写明回炉没做成",
+      "回炉修订未能完成" in out.review.summary, out.review.summary[-70:])
+check("待核对项条数如实交代", "1 条待核对项" in out.review.summary)
+check("统计里标记了回炉失败", out.stats.get("review_refine_failed") is True,
+      str(out.stats))
+check("回炉次数如实记 0（这一轮没做成）", out.stats.get("review_rounds") == 0,
+      str(out.stats.get("review_rounds")))
+check("失败后立刻收手，不再烧第二轮", calls["refine"] == 1, f"调了 {calls['refine']} 次")
+check("中间结果至少落盘过一次", saved["n"] >= 1, f"落盘 {saved['n']} 次")
+
+# ---------------------------------------------------------------- 没有事实错误就不该进回炉
+SUP_ONLY = ReviewReport(
+    verdict="revise", score=80, rounds=0, model_review_ok=True, summary="建议补一句口诀。",
+    issues=[ReviewIssue(kind="supplement", severity="minor", target="kp1",
+                        problem="可以再讲细一点", suggestion="补个例子")],
+)
+review_stage.review = lambda *a, **k: SUP_ONLY.model_copy(deep=True)
+review_stage.refine = fake_refine
+out2 = review_stage.run_review_loop(make_lesson(), [], Path("shots"), 360.0, max_rounds=3)
+check("只有教学补充时根本不进回炉", calls["refine"] == 1,
+      f"回炉调用次数仍是 {calls['refine']}（没增加就对了）")
+check("教学补充也算跑完了，不算失败", out2.stats.get("review_refine_failed") is None)
+
+print()
+if fails:
+    print(f"❌ {len(fails)} 项不通过：" + "、".join(fails[:6]))
+    raise SystemExit(1)
+print("✅ 模型服务出问题时，仍然交得出教案")

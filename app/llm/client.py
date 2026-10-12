@@ -256,10 +256,32 @@ def _extract_json(text: str) -> Any:
     raise LLMError(f"模型输出里找不到合法 JSON，原始内容前 500 字：\n{text[:500]}")
 
 
+# 连接层面的失败：连接被拒(10061)、连接重置、对端关闭、代理无响应。
+# 这类错误和服务过载一样需要时间恢复，用秒级退避是浪费重试次数。
+_CONNECT_HINTS = (
+    "10061", "10054", "10060", "connection refused", "connection reset",
+    "connection aborted", "peer closed connection", "incomplete chunked read",
+    "remote end closed", "server disconnected", "proxy",
+)
+
+
+def _is_connect_error(exc: Exception | None) -> bool:
+    if exc is None:
+        return False
+    if isinstance(exc, (ConnectionError, ConnectionResetError)):
+        return True
+    low = str(exc).lower()
+    return any(h in low for h in _CONNECT_HINTS)
+
+
 def _is_retryable(status: int, exc: Exception) -> bool:
     if status in RETRYABLE_CODES:
         return True
     if status == 0 and isinstance(exc, (httpx.TimeoutException, httpx.TransportError)):
+        return True
+    # 裸的 ConnectionRefusedError / ConnectionResetError（本地代理或出口链路
+    # 挂掉时 httpx 有时来不及包装）也要重试，否则一次就判死。
+    if _is_connect_error(exc):
         return True
     text = str(exc)
     return any(f"[{code}]" in text for code in RETRYABLE_CODES)
@@ -578,6 +600,11 @@ class ModelClient:
                     break
                 base = min(2**attempt, 30)
                 if last_status in OVERLOAD_CODES:
+                    base = min(10 * (attempt + 1), 45)
+                elif _is_connect_error(last_error):
+                    # 连接被拒/连接重置时按 1/2/4/8 秒退避等于硬怼一个还没恢复的
+                    # 连接：实测 5 次重试全打在同一个坏连接上，18 秒就耗完了。
+                    # 本地代理或出口链路恢复通常要十几秒起步，跟服务过载同级对待。
                     base = min(10 * (attempt + 1), 45)
                 self._note(f"↻ {int(base)}s 后重试（{kind}）")
                 time.sleep(base + random.uniform(0, 3))

@@ -332,10 +332,20 @@ def _ground_homework(items: list[str], knowledge: list[KnowledgePoint]) -> list[
     return kept
 
 
-# 判断题。题干里出现这些说法，说明它是一道「对不对」的抢答题——
-# 老师当场只给一个是非结论，不可能有推导过程。
+# 判断题（抢答题）。老师当场只给一个是非结论，不可能有推导过程。
+#
+# 第一类：题干直接问「对不对 / 是否正确」——一眼可辨。
+# 第二类（实测补上）：题干是一句陈述式的全称命题，「斜率相等的两直线的倾斜角
+# 一定相等.」「任意两条直线都有斜率.」这类。它同样没有设问、没有求解要求，
+# 多步推导一定是模型加的戏。判据是"含全称标记且不含求解动词"。
+#
+# 为什么不用"只要没有求字就当判断题"：老师真的会讲这类题的口头推理
+# （实测 ex4「直线的倾斜角为 a，则 sin a > 0.」老师明确用 a=0 举了反例），
+# 那种解析步骤是视频里真有的，删掉反而丢内容。所以必须有全称标记才判。
 _JUDGE_STMT = re.compile(
     r"对不对|对吗|是否正确|是否成立|正确吗|成立吗|真或假|对错|判断正误")
+_JUDGE_UNIVERSAL = re.compile(r"一定|必然|凡是|总是|都相等|都相同|恒成立")
+_SOLVE_VERB = re.compile(r"求|计算|解[:：]|证明|化简|写出|填出|填空|是多少|等于多少")
 
 
 def _trim_invented_solutions(lesson: Lesson, knowledge: list[KnowledgePoint]) -> int:
@@ -356,7 +366,12 @@ def _trim_invented_solutions(lesson: Lesson, knowledge: list[KnowledgePoint]) ->
             if not ex.is_exercise:
                 continue
             stmt = ex.statement_latex or ex.statement_plain or ""
-            if not stmt or not _JUDGE_STMT.search(stmt):
+            if not stmt:
+                continue
+            is_judge = bool(_JUDGE_STMT.search(stmt)) or bool(
+                _JUDGE_UNIVERSAL.search(stmt) and not _SOLVE_VERB.search(stmt)
+            )
+            if not is_judge:
                 continue
             steps = [s for s in (ex.solution or []) if str(s or "").strip()]
             if len(steps) > 1:

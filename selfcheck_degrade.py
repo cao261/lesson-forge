@@ -128,6 +128,42 @@ check("只有教学补充时根本不进回炉", calls["refine"] == 1,
       f"回炉调用次数仍是 {calls['refine']}（没增加就对了）")
 check("教学补充也算跑完了，不算失败", out2.stats.get("review_refine_failed") is None)
 
+# ---------------------------------------------------------------- 过期意见必须在判定前剔除
+# 实测第 7 轮：16 条事实错误里 12 条属于 ex1/ex2/ex3 这三条**已被降级成口述要点**
+# 的条目，它们根本不在教案里了。后果是判定永远 fail、还白白烧掉一整轮回炉。
+from app.stages.review import _drop_stale_issues
+
+mixed = Lesson(
+    meta=LessonMeta(title="过期意见测试"),
+    knowledge=[
+        KnowledgePoint(id="kp1", title="考点一", examples=[
+            Example(id="ex1", title="口述要点", statement_plain="", is_exercise=False),
+            Example(id="ex2", title="口述要点", statement_plain="", is_exercise=False),
+            Example(id="ex3", title="口述要点", statement_plain="", is_exercise=False),
+            Example(id="ex4", title="真例题", statement_plain="题面", is_exercise=True)]),
+    ],
+)
+mixed.review.issues = [
+    ReviewIssue(kind="fact", severity="major", target="ex1", problem="ex1 缺少题目截图"),
+    ReviewIssue(kind="fact", severity="major", target="ex2", problem="ex2 题干可能不准"),
+    ReviewIssue(kind="fact", severity="major", target="ex4", problem="ex4 答案写错了"),
+    ReviewIssue(kind="fact", severity="minor", target="整体", problem="缺少课后作业"),
+    # 点名多道题但还剩一道真例题 —— 属于跨条目的整体判断，必须留着
+    ReviewIssue(kind="fact", severity="minor", target="ex1, ex4",
+                problem="两条的术语不统一"),
+]
+gone = _drop_stale_issues(mixed.review, mixed)
+left = [i.target for i in mixed.review.issues]
+print(f"  剔除 {gone} 条，剩 {left}")
+check("针对已降级例题的意见被剔除", gone == 2, f"剔除了 {gone} 条")
+check("真例题的意见留着", "ex4" in left)
+check("整体性意见留着", "整体" in left)
+check("跨条目的意见留着（还剩一道真例题）", "ex1, ex4" in left, str(left))
+check("没有降级条目时不动任何意见", _drop_stale_issues(mixed.review, make_lesson()) == 0
+      if all(e.is_exercise for k in make_lesson().knowledge for e in k.examples) else True)
+empty = Lesson(meta=LessonMeta(title="t"), knowledge=[])
+check("没有知识点时安全", _drop_stale_issues(empty.review, empty) == 0)
+
 print()
 if fails:
     print(f"❌ {len(fails)} 项不通过：" + "、".join(fails[:6]))

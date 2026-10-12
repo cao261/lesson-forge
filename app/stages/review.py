@@ -283,6 +283,32 @@ def _shots_for_review(lesson: Lesson, shots_dir: Path,
     return "\n".join(rows) + "\n" + note if rows else "（本课没有知识点）"
 
 
+_STALE_RX = re.compile(r"\b(ex\d+)\b", re.I)
+
+
+def _drop_stale_issues(report, lesson: Lesson) -> int:
+    """剔除针对"已降级成口述要点"的例题的过期意见，返回剔除条数。
+
+    判据和 Word 打印时用的是同一套：意见里点名的例题如果**全部**都已经是
+    口述要点，这条意见说的东西就不在教案里了。一条意见点了多道题、
+    只要还剩一道真例题就留着——那种多半是跨条目的整体判断。
+    """
+    dropped = {ex.id.lower() for kp in lesson.knowledge for ex in kp.examples
+               if not ex.is_exercise}
+    if not dropped or not report.issues:
+        return 0
+    keep: list[ReviewIssue] = []
+    gone = 0
+    for issue in report.issues:
+        ids = _STALE_RX.findall(f"{issue.target} {issue.problem}")
+        if ids and all(i.lower() in dropped for i in ids):
+            gone += 1
+            continue
+        keep.append(issue)
+    report.issues = keep
+    return gone
+
+
 def review(
     lesson: Lesson,
     cues: list[Cue],
@@ -456,6 +482,22 @@ def review(
                 report.issues.append(issue)
 
     report.model_review_ok = True
+    # ---- 过期意见必须在**判定之前**清掉 ----
+    # 切分阶段为"题目全覆盖"会把概念讲解立成例题，例题甄别随后把它们降级成
+    # 口述要点（它们已经不在教案里了）。但审核器是照着切分结果审的，
+    # 于是照样给这些已经不存在的条目报错：「ex1 缺少题目截图」
+    # 「ex2 题干可能不准」……
+    # 实测第 7 轮：16 条事实错误里 12 条属于 ex1/ex2/ex3 这三条已被降级的条目。
+    # 后果有三个：① 判定永远是 fail，教案再干净也过不了关；
+    # ② 白白烧掉一整轮回炉去"修"根本不存在的东西；
+    # ③ 老师在附录里看到一堆自己教案上没有的问题。
+    # 之前只在 Word 打印时过滤过，判定和回炉照旧用旧意见——治标没治本。
+    stale_dropped = _drop_stale_issues(report, lesson)
+    if stale_dropped and progress:
+        progress(1.0, f"已剔除 {stale_dropped} 条针对口述讲解段落的过期意见")
+    if stale_dropped:
+        report.summary = (report.summary + " ").strip()
+
     report.verdict = worst  # type: ignore[assignment]
     report.score = round(sum(scores) / len(scores), 1) if scores else 0.0
     # 风险取最严重的那个，别用"低"掩盖某一批的高风险

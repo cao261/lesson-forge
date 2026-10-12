@@ -205,6 +205,31 @@ _d, _cd = _hw_lesson("", [])
 check("没有字幕时的空作业也安全",
       not [x for x in rule_check(_d, Path("shots"), 60.0, _cd) if "课后作业" in x])
 
+# ---------------------------------------------------------------- 骨架空壳要自动重试
+# 实测第 8 轮：compose-outline 返回空壳后直接抛异常中止，
+# 二十分钟的 ASR/切分/抽帧/看图全部白做。跟审核阶段那次是同一类毛病。
+from app.models import KnowledgePoint as _KP
+from app.stages.compose import OUTLINE_RETRIES, _outline_degenerate
+
+_good = {"knowledge": [
+    {"id": "kp1", "summary": "讲了定义", "definition": "定义"},
+    {"id": "kp2", "summary": "讲了推导", "definition": "推导"},
+]}
+print(f"  OUTLINE_RETRIES = {OUTLINE_RETRIES}")
+check("有内容的骨架不判空壳", not _outline_degenerate(_good, [_KP(id="kp1", title="a")]))
+check("全空的骨架判空壳", _outline_degenerate({"knowledge": [
+    {"id": "kp1", "summary": "", "definition": ""},
+    {"id": "kp2", "summary": "", "definition": ""}]}, []))
+check("knowledge 缺失判空壳", _outline_degenerate({}, []))
+check("knowledge 不是列表判空壳", _outline_degenerate({"knowledge": "x"}, []))
+check("返回的不是 dict 也判空壳", _outline_degenerate(["kp1"], []))
+check("一半有内容仍算塌（宁严勿松）", _outline_degenerate({"knowledge": [
+    {"id": "kp1", "summary": "有", "definition": "有"},
+    {"id": "kp2", "summary": "", "definition": ""},
+    {"id": "kp3", "summary": "", "definition": ""},
+    {"id": "kp4", "summary": "", "definition": ""}]}, []))
+check("给了重试机会", OUTLINE_RETRIES >= 2, f"{OUTLINE_RETRIES} 次")
+
 print()
 if fails:
     print(f"❌ {len(fails)} 项不通过：" + "、".join(fails[:6]))

@@ -1,6 +1,8 @@
 """阶段 6：让模型以"教案编写助教"的身份，基于字幕 + 题干生成完整教案。"""
 from __future__ import annotations
 
+import random
+import time
 import json
 import re
 import threading
@@ -104,6 +106,28 @@ def _degenerate(lesson: Lesson) -> str:
     return "；".join(reasons + extra)
 
 
+# 骨架空壳重试次数。第一次之外再给两次机会。
+OUTLINE_RETRIES = 2
+
+
+def _outline_degenerate(data: dict, kps: list[KnowledgePoint]) -> bool:
+    """只看骨架：知识点有没有真正的讲解内容。"""
+    if not isinstance(data, dict):
+        return True
+    rows = data.get("knowledge")
+    if not isinstance(rows, list) or not rows:
+        return True
+    filled = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if (str(row.get("summary") or "").strip()
+                or str(row.get("definition") or "").strip()):
+            filled += 1
+    # 至少要有一半知识点带着真内容，否则骨架等于没写
+    return filled * 2 < len(rows)
+
+
 def compose(
     meta: LessonMeta,
     kps: list[KnowledgePoint],
@@ -135,6 +159,27 @@ def compose(
         temperature=0.3,
         label="compose-outline",
     )
+
+    # 骨架塌了就地重试，别让整个任务白跑。
+    # 实测第 8 轮：compose-outline 这次返回了个空壳（4 个知识点全都没摘要/定义、
+    # 教学目标为空、课堂流程为空），代码判成"空壳教案"直接抛异常中止，
+    # 前面二十分钟的 ASR、切分、抽帧、看图全部白做，最后什么也没产出。
+    # 这跟审核阶段那次是同一类毛病：一次模型抖动 = 用户什么都拿不到。
+    # 这里只用"骨架本身塌不塌"当重试信号——例题缺失不重试骨架，
+    # 因为那要重跑的是后面的例题批次，而且流程本来就有兜底。
+    for attempt in range(1, OUTLINE_RETRIES + 1):
+        if not _outline_degenerate(data, kps):
+            break
+        say(0.22, f"⚠ 教案骨架第 {attempt} 次返回空壳，重试…")
+        if attempt == OUTLINE_RETRIES:
+            break
+        time.sleep(6 * attempt + random.uniform(0, 3))
+        data = client.chat_object(
+            [{"role": "system", "content": COMPOSE_SYSTEM},
+             {"role": "user", "content": outline_msg}],
+            temperature=0.3 + 0.1 * attempt,
+            label=f"compose-outline-retry{attempt}",
+        )
 
     # ---- 后续每发：按知识点分批补例题 ----
     chunks = _chunk_kps(kps)

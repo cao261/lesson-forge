@@ -38,6 +38,11 @@ def _merge_notes(existing: str, addition: str) -> str:
     return " | ".join(kept)[-MAX_NOTES:]
 
 
+# 课尾题重搜时往回看多少秒。抢答题通常集中在最后 1~2 分钟，
+# 45 秒足够覆盖"四五道抢答连着问"的节奏，又不会把上一节的内容捞进来。
+TAIL_SHOT_WINDOW = 45.0
+
+
 def capture_examples(
     video: Path,
     kps: list[KnowledgePoint],
@@ -59,9 +64,22 @@ def capture_examples(
                     done / max(1, total) * 0.8,
                     f"截取 {kp.id}/{ex.id}「{ex.title}」画面（{_hms(ex.ts_start)}）",
                 )
-            lo = max(0.0, ex.ts_start - SETTINGS.shot_pre_roll)
-            # 候选帧聚焦在题目刚引入展示的窗口（切页至开讲初期），避免深挖入后段板书阶段
-            hi = min(duration, max(ex.ts_start + 12.0, min(ex.ts_start + 25.0, ex.ts_end + 5.0)))
+            # ---- 课尾题单独处理：按片尾重搜，不要信模型给的 ts_start ----
+            # 切分模型给课尾抢答题的起始时间常常偏早，实测偏了 65 秒
+            # （真实在 05:17 给成 04:05）。抽帧照着错时间点去抽，抽到的画面
+            # 里当然没有那道题，看图确认全部失败，两道题被降级成口述要点，
+            # 教案里一道例题都不剩——而日志上只写着"没有题面"，看不出是这个原因。
+            #
+            # 判据用"时间窗一直拖到视频结束"：课尾抢答题的定义就是这个特征，
+            # 中间的例题不会一路拖到片尾。
+            if duration > 0 and ex.ts_end >= duration - 2.0:
+                lo = max(0.0, duration - TAIL_SHOT_WINDOW)
+                hi = duration
+            else:
+                lo = max(0.0, ex.ts_start - SETTINGS.shot_pre_roll)
+                # 候选帧聚焦在题目刚引入展示的窗口（切页至开讲初期），避免深挖入后段板书阶段
+                hi = min(duration, max(ex.ts_start + 12.0,
+                                       min(ex.ts_start + 25.0, ex.ts_end + 5.0)))
             if hi - lo < 3:
                 hi = min(duration, lo + 3)
             safe = _safe_id(ex.id)
